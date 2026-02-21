@@ -12,7 +12,7 @@ A PySide6 desktop app for generating subtitles from video/audio files using Mist
 - Configurable Mistral options:
   - `model`
   - language mode: auto-detect or manual language code
-  - `timestamp_granularities` (`none`, `segment`, `word`)
+  - `timestamp_granularities` (`none`, `segment`, `word`) – choose `segment` or `word` to get timecodes; `none` will produce a transcript without timestamps.
   - `diarize`
   - `context_bias`
 - Optional subtitle translation:

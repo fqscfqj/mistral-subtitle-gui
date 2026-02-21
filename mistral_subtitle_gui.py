@@ -256,6 +256,8 @@ def extract_audio_with_ffmpeg(ffmpeg_path: str, input_file: Path, output_file: P
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )
     if result.returncode != 0:
@@ -864,7 +866,10 @@ class MainWindow(QMainWindow):
         self.language_input.setPlaceholderText("语言代码，例如 zh / en")
 
         self.timestamp_combo = QComboBox()
+        # timestamp granularity determines whether the API returns segments with start/end times.
+        # default to "segment" so that users normally get timecodes without needing to change it.
         self.timestamp_combo.addItems(["none", "segment", "word"])
+        self.timestamp_combo.setCurrentText("segment")
 
         self.diarize_checkbox = QCheckBox("启用说话人分离")
 

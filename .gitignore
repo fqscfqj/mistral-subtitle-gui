@@ -111,3 +111,5 @@ env/
 .dmypy.json
 .dmypy
 typing/
+
+.mistral_subtitle_gui_settings.json
