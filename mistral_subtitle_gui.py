@@ -896,7 +896,10 @@ def resolve_translation_base(
     source_lang_code: str,
     target_lang_code: str,
     force_target_suffix: bool = False,
+    always_append_target_suffix: bool = False,
 ) -> Path:
+    if always_append_target_suffix:
+        return target_dir / f"{source_stem}.{target_lang_code}"
     if force_target_suffix:
         target_suffix = f".{target_lang_code}".casefold()
         if source_stem.casefold().endswith(target_suffix):
@@ -917,6 +920,7 @@ def write_translation_outputs(
     translated_text: str,
     source_path: Optional[Path] = None,
     force_target_suffix: bool = False,
+    always_append_target_suffix: bool = False,
     write_lrc: bool = False,
 ) -> Dict[str, str]:
     outputs: Dict[str, str] = {}
@@ -927,6 +931,7 @@ def write_translation_outputs(
         source_lang_code=source_lang_code,
         target_lang_code=target_lang_code,
         force_target_suffix=force_target_suffix,
+        always_append_target_suffix=always_append_target_suffix,
     )
 
     def avoid_overwrite(path: Path) -> Path:
@@ -1125,13 +1130,14 @@ def transcribe_task(
             outputs.update(
                 write_translation_outputs(
                     target_dir=target_dir,
-                    source_stem=source_path.stem,
+                    source_stem=out_base.stem,
                     source_lang_code=lang_code,
                     settings=settings,
                     original_segments=original_segments,
                     translated_segments=translated_segments,
                     translated_text=translated_text,
                     source_path=source_path,
+                    always_append_target_suffix=True,
                     write_lrc=settings.save_lrc and is_audio_input,
                 )
             )

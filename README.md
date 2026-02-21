@@ -78,6 +78,5 @@ python mistral_subtitle_gui.py
 启用翻译后：
 
 - 原文转写：`input_video.en.srt`（示例）
-- 翻译字幕：`input_video.zh.srt`
-- 若原语言与目标语言相同，翻译文件会使用 `.translated` 后缀避免覆盖（例如：`input_video.zh.translated.srt`）
-- 导入已有字幕翻译时，会额外生成目标语言文件（例如：`input_video.srt` -> `input_video.zh.srt`），不会覆盖原字幕
+- 转录后翻译字幕会基于转写文件追加目标语言后缀：`input_video.en.srt` -> `input_video.en.zh.srt`
+- 导入已有字幕翻译时，会额外生成目标语言文件（例如：`input_video.srt` -> `input_video.zh.srt`）；若文件名已带目标语言后缀，则会使用 `.translated` 避免覆盖（例如：`input_video.zh.srt` -> `input_video.zh.translated.srt`）
