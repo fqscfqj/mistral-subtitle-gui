@@ -360,27 +360,112 @@ def extract_chat_text(payload: Dict[str, Any]) -> str:
 
 
 def parse_json_array_output(raw_text: str) -> List[str]:
-    text = raw_text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if len(lines) >= 2:
-            text = "\n".join(lines[1:-1]).strip()
+    def strip_code_fence(text: str) -> str:
+        stripped = text.strip()
+        if not stripped.startswith("```"):
+            return stripped
+        lines = stripped.splitlines()
+        if len(lines) >= 3 and lines[-1].strip().startswith("```"):
+            return "\n".join(lines[1:-1]).strip()
+        return stripped
 
-    parsed: Any = None
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        start = text.find("[")
-        end = text.rfind("]")
-        if start >= 0 and end > start:
-            snippet = text[start : end + 1]
-            parsed = json.loads(snippet)
-        else:
-            raise RuntimeError("翻译结果不是有效 JSON 数组")
+    def find_balanced_json(text: str, open_char: str, close_char: str) -> str:
+        in_string = False
+        escaped = False
+        depth = 0
+        start = -1
+        for idx, ch in enumerate(text):
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\" and in_string:
+                escaped = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == open_char:
+                if depth == 0:
+                    start = idx
+                depth += 1
+                continue
+            if ch == close_char and depth > 0:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    return text[start : idx + 1]
+        return ""
 
-    if not isinstance(parsed, list):
-        raise RuntimeError("翻译结果不是数组格式")
-    return [str(item).strip() for item in parsed]
+    def extract_text_from_item(item: Any) -> str:
+        if item is None:
+            return ""
+        if isinstance(item, str):
+            return item.strip()
+        if isinstance(item, (int, float, bool)):
+            return str(item).strip()
+        if isinstance(item, dict):
+            for key in ("translation", "translated", "text", "content", "output", "target"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    return value.strip()
+            str_values = [v.strip() for v in item.values() if isinstance(v, str) and v.strip()]
+            if len(str_values) == 1:
+                return str_values[0]
+        raise RuntimeError("翻译结果数组元素不是字符串")
+
+    def coerce_to_list(parsed: Any) -> Optional[List[str]]:
+        if isinstance(parsed, str):
+            nested = parsed.strip()
+            if nested.startswith("[") or nested.startswith("{"):
+                try:
+                    reparsed = json.loads(nested)
+                except Exception:
+                    return None
+                return coerce_to_list(reparsed)
+            return None
+        if isinstance(parsed, list):
+            return [extract_text_from_item(item) for item in parsed]
+        if isinstance(parsed, dict):
+            for key in ("translations", "translation", "result", "results", "output", "outputs", "items", "lines", "data"):
+                candidate = parsed.get(key)
+                if isinstance(candidate, list):
+                    return coerce_to_list(candidate)
+            if len(parsed) == 1:
+                only = next(iter(parsed.values()))
+                if isinstance(only, list):
+                    return coerce_to_list(only)
+        return None
+
+    text = raw_text.replace("\ufeff", "").strip()
+    candidates: List[str] = []
+    base = strip_code_fence(text)
+    if base:
+        candidates.append(base)
+
+    array_snippet = find_balanced_json(base, "[", "]")
+    if array_snippet:
+        candidates.append(array_snippet)
+
+    object_snippet = find_balanced_json(base, "{", "}")
+    if object_snippet:
+        candidates.append(object_snippet)
+
+    seen = set()
+    for candidate in candidates:
+        normalized = candidate.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        try:
+            parsed = json.loads(normalized)
+        except Exception:
+            continue
+        coerced = coerce_to_list(parsed)
+        if coerced is not None:
+            return coerced
+
+    raise RuntimeError("翻译结果不是有效 JSON 数组")
 
 
 def call_openai_compatible_chat(
@@ -477,40 +562,71 @@ def translate_lines(
 
     result: List[str] = []
     chunk_size = 40
+    max_attempts = 3
 
     for i in range(0, len(lines), chunk_size):
         if cancel_event.is_set():
             raise TaskCancelled("翻译前已取消")
 
         chunk = lines[i : i + chunk_size]
-        user_prompt = (
-            f"请把以下字幕翻译为 `{target_lang}`。"
-            "请直接返回 JSON 数组，每个元素对应一条翻译，不得缺失。"
-            f"\n输入：{json.dumps(chunk, ensure_ascii=False)}"
-        )
+        last_error = ""
+        last_content = ""
+        translated_chunk: Optional[List[str]] = None
 
-        if settings.translation_mode == "mistral":
-            content = call_mistral_chat(
-                api_key=transcribe_api_key,
-                model=settings.translation_model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-            )
-        elif settings.translation_mode == "openai":
-            content = call_openai_compatible_chat(
-                base_url=settings.translation_openai_base_url,
-                api_key=settings.translation_openai_api_key,
-                model=settings.translation_model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-            )
-        else:
-            raise RuntimeError("未知翻译模式")
+        for attempt in range(1, max_attempts + 1):
+            if attempt == 1:
+                user_prompt = (
+                    f"请把以下字幕翻译为 `{target_lang}`。"
+                    "请直接返回 JSON 数组，每个元素对应一条翻译，不得缺失。"
+                    f"\n输入：{json.dumps(chunk, ensure_ascii=False)}"
+                )
+            else:
+                user_prompt = (
+                    "你上一轮输出不符合格式要求。"
+                    f"请重新翻译并只返回 JSON 字符串数组，数组长度必须是 {len(chunk)}。"
+                    "禁止代码块、禁止解释、禁止额外字段。"
+                    f"\n输入：{json.dumps(chunk, ensure_ascii=False)}"
+                    f"\n上一次输出：{last_content[:800]}"
+                )
 
-        translated = parse_json_array_output(content)
-        if len(translated) != len(chunk):
-            raise RuntimeError("翻译结果条数与原字幕不一致")
-        result.extend(translated)
+            if settings.translation_mode == "mistral":
+                content = call_mistral_chat(
+                    api_key=transcribe_api_key,
+                    model=settings.translation_model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+            elif settings.translation_mode == "openai":
+                content = call_openai_compatible_chat(
+                    base_url=settings.translation_openai_base_url,
+                    api_key=settings.translation_openai_api_key,
+                    model=settings.translation_model,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+            else:
+                raise RuntimeError("未知翻译模式")
+
+            last_content = content
+            try:
+                translated = parse_json_array_output(content)
+                if len(translated) != len(chunk):
+                    raise RuntimeError("翻译结果条数与原字幕不一致")
+                translated_chunk = translated
+                break
+            except Exception as exc:
+                last_error = str(exc).strip() or "未知错误"
+                if attempt >= max_attempts:
+                    preview = content.strip().replace("\n", " ")
+                    if len(preview) > 220:
+                        preview = preview[:220] + "..."
+                    raise RuntimeError(
+                        f"翻译结果格式错误，已重试 {max_attempts} 次：{last_error} | 返回片段：{preview}"
+                    )
+
+        if translated_chunk is None:
+            raise RuntimeError("翻译失败：未获得有效结果")
+        result.extend(translated_chunk)
 
     return result
 

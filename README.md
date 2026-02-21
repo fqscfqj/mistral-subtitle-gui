@@ -1,42 +1,42 @@
-﻿# Mistral Subtitle Studio (Desktop GUI)
+﻿# Mistral Subtitle Studio（桌面 GUI）
 
-A PySide6 desktop app for generating subtitles from video/audio files using Mistral Audio Transcription API.
+这是一个基于 PySide6 的桌面应用，使用 Mistral 音频转写 API 从视频/音频文件生成字幕。
 
-## Features
+## 功能
 
-- Drag & drop files/folders
-- Add single files or recursively scan a folder
-- Independent pages: `任务` and `设置`
-- Multi-threaded task execution (configurable thread count)
-- Per-task status and progress + global progress
-- Configurable Mistral options:
+- 支持拖拽文件/文件夹
+- 可添加单个文件，或递归扫描整个文件夹
+- 独立页面：`任务` 和 `设置`
+- 多线程任务执行（线程数可配置）
+- 支持单任务状态与进度 + 全局进度
+- 可配置的 Mistral 选项：
   - `model`
-  - language mode: auto-detect or manual language code
-  - `timestamp_granularities` (`none`, `segment`, `word`) – choose `segment` or `word` to get timecodes; `none` will produce a transcript without timestamps.
-  - `diarize`
+  - 语言模式：自动检测或手动指定语言代码
+  - `timestamp_granularities`（`none`、`segment`、`word`）：选择 `segment` 或 `word` 可获得时间戳；`none` 将生成不带时间戳的转写文本。
+  - `diarize`（说话人分离）：让模型尝试识别不同说话者并在输出中添加 `speaker` 标签，生成的 SRT 会在每行前用 `[Speaker X]` 前缀显示。启用后如果音频中有多个人的声音，可在字幕里区分发言者。
   - `context_bias`
-- Optional subtitle translation:
-  - no translation / Mistral API / OpenAI-compatible API
-  - OpenAI-compatible `base_url` + `api_key` (supports third-party providers)
-  - target language code
-  - bilingual SRT output (source + translated line)
-- Output directory mode:
-  - use source file directory
-  - use custom directory
-- Language-suffixed output naming (example: `abc.zh.srt`)
-- Output formats:
+- 可选字幕翻译：
+  - 不翻译 / Mistral API / OpenAI 兼容 API
+  - OpenAI 兼容 `base_url` + `api_key`（支持第三方服务商）
+  - 目标语言代码
+  - 双语 SRT 输出（原文 + 译文）
+- 输出目录模式：
+  - 使用源文件所在目录
+  - 使用自定义目录
+- 输出文件名支持语言后缀（示例：`abc.zh.srt`）
+- 输出格式：
   - `.srt`
   - `.txt`
   - `.json`
-- Batch stop/cancel support for queued tasks
+- 支持批量任务停止/取消（包括队列中的任务）
 
-## Requirements
+## 运行要求
 
 - Python 3.10+
-- `ffmpeg` available in `PATH` (required for video files)
-- Mistral API key (`MISTRAL_API_KEY`)
+- `PATH` 中可用的 `ffmpeg`（处理视频文件时必需）
+- Mistral API 密钥（`MISTRAL_API_KEY`）
 
-## Install
+## 安装
 
 ```bash
 python -m venv .venv
@@ -44,34 +44,34 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Run
+## 运行
 
 ```bash
 python mistral_subtitle_gui.py
 ```
 
-## Notes on API behavior
+## API 行为说明
 
-- Based on Mistral docs, `language` cannot be used together with `timestamp_granularities`.
-- This app will ignore `language` when timestamp granularity is `segment` or `word`.
-- `context_bias` is normalized and capped to 100 unique terms.
+- 根据 Mistral 文档，`language` 不能与 `timestamp_granularities` 同时使用。
+- 当时间戳粒度为 `segment` 或 `word` 时，本应用会忽略 `language`。
+- `context_bias` 会进行规范化处理，并最多保留 100 个唯一词条。
 
-## Environment variables
+## 环境变量
 
-- `MISTRAL_API_KEY`: default API key loaded at startup
-- `OPENAI_API_KEY`: optional default key for OpenAI-compatible translation
-- `FFMPEG_BINARY`: optional absolute path to ffmpeg executable
+- `MISTRAL_API_KEY`：启动时默认加载的 API 密钥
+- `OPENAI_API_KEY`：用于 OpenAI 兼容翻译的可选默认密钥
+- `FFMPEG_BINARY`：可选，`ffmpeg` 可执行文件的绝对路径
 
-## Output
+## 输出
 
-Outputs are named with source stem + language code suffix:
+输出文件命名规则为：源文件名（不含扩展名）+ 语言代码后缀：
 
 - `input_video.zh.srt`
 - `input_video.zh.txt`
 - `input_video.zh.json`
 
-When translation is enabled:
+启用翻译后：
 
-- source transcript: `input_video.en.srt` (example)
-- translated subtitle: `input_video.zh.srt`
-- if source and target language are the same, translated files use `.translated` to avoid overwrite (e.g. `input_video.zh.translated.srt`)
+- 原文转写：`input_video.en.srt`（示例）
+- 翻译字幕：`input_video.zh.srt`
+- 若原语言与目标语言相同，翻译文件会使用 `.translated` 后缀避免覆盖（例如：`input_video.zh.translated.srt`）
