@@ -11,7 +11,7 @@ import traceback
 import urllib.error
 import urllib.request
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -115,6 +115,8 @@ class TranscriptionSettings:
     translation_openai_base_url: str
     translation_bilingual_srt: bool
     allow_subtitle_import: bool
+    thread_count: int
+    subtitle_translation_thread_count: int
     save_srt: bool
     save_txt: bool
     save_json: bool
@@ -680,6 +682,7 @@ def translate_lines(
     settings: TranscriptionSettings,
     transcribe_api_key: str,
     cancel_event: threading.Event,
+    parallel_workers: int = 1,
 ) -> List[str]:
     if not lines:
         return []
@@ -704,12 +707,12 @@ def translate_lines(
     result: List[str] = []
     chunk_size = 40
     max_attempts = 3
+    chunks: List[List[str]] = [lines[i : i + chunk_size] for i in range(0, len(lines), chunk_size)]
 
-    for i in range(0, len(lines), chunk_size):
+    def translate_chunk(chunk: List[str]) -> List[str]:
         if cancel_event.is_set():
             raise TaskCancelled("翻译前已取消")
 
-        chunk = lines[i : i + chunk_size]
         last_error = ""
         last_content = ""
         translated_chunk: Optional[List[str]] = None
@@ -767,7 +770,26 @@ def translate_lines(
 
         if translated_chunk is None:
             raise RuntimeError("翻译失败：未获得有效结果")
-        result.extend(translated_chunk)
+        return translated_chunk
+
+    workers = max(1, int(parallel_workers))
+    if workers == 1 or len(chunks) <= 1:
+        for chunk in chunks:
+            result.extend(translate_chunk(chunk))
+        return result
+
+    workers = min(workers, len(chunks))
+    ordered: List[Optional[List[str]]] = [None] * len(chunks)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_idx = {pool.submit(translate_chunk, chunk): idx for idx, chunk in enumerate(chunks)}
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            ordered[idx] = future.result()
+
+    for item in ordered:
+        if item is None:
+            raise RuntimeError("翻译失败：并行结果缺失")
+        result.extend(item)
 
     return result
 
@@ -1083,6 +1105,7 @@ def translate_subtitle_task(
             settings=settings,
             transcribe_api_key=settings.api_key,
             cancel_event=cancel_event,
+            parallel_workers=settings.subtitle_translation_thread_count,
         )
 
         translated_segments: List[Dict[str, Any]] = []
@@ -1327,6 +1350,9 @@ class MainWindow(QMainWindow):
         self.translation_bilingual_checkbox.setChecked(True)
         self.allow_subtitle_import_checkbox = QCheckBox("允许导入字幕文件并翻译")
         self.allow_subtitle_import_checkbox.setChecked(True)
+        self.subtitle_translation_thread_spin = QSpinBox()
+        self.subtitle_translation_thread_spin.setRange(1, 16)
+        self.subtitle_translation_thread_spin.setValue(3)
 
         self.translation_openai_base_input = QLineEdit("https://api.openai.com/v1")
         self.translation_openai_base_input.setPlaceholderText(
@@ -1354,10 +1380,12 @@ class MainWindow(QMainWindow):
         translation_layout.addWidget(self.translation_model_input, 2, 1)
         translation_layout.addWidget(self.translation_bilingual_checkbox, 3, 0, 1, 2)
         translation_layout.addWidget(self.allow_subtitle_import_checkbox, 4, 0, 1, 2)
-        translation_layout.addWidget(QLabel("OpenAI 兼容 Base URL"), 5, 0)
-        translation_layout.addWidget(self.translation_openai_base_input, 5, 1)
-        translation_layout.addWidget(QLabel("OpenAI 兼容 API Key"), 6, 0)
-        translation_layout.addWidget(openai_key_row, 6, 1)
+        translation_layout.addWidget(QLabel("字幕翻译线程数"), 5, 0)
+        translation_layout.addWidget(self.subtitle_translation_thread_spin, 5, 1)
+        translation_layout.addWidget(QLabel("OpenAI 兼容 Base URL"), 6, 0)
+        translation_layout.addWidget(self.translation_openai_base_input, 6, 1)
+        translation_layout.addWidget(QLabel("OpenAI 兼容 API Key"), 7, 0)
+        translation_layout.addWidget(openai_key_row, 7, 1)
 
         settings_layout.addWidget(QLabel("API 密钥"), 0, 0)
         settings_layout.addWidget(api_key_row, 0, 1)
@@ -1369,7 +1397,7 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(self.language_input, 3, 1)
         settings_layout.addWidget(QLabel("时间戳粒度"), 4, 0)
         settings_layout.addWidget(self.timestamp_combo, 4, 1)
-        settings_layout.addWidget(QLabel("最大线程数"), 5, 0)
+        settings_layout.addWidget(QLabel("任务线程数"), 5, 0)
         settings_layout.addWidget(self.thread_spin, 5, 1)
         settings_layout.addWidget(QLabel("输出目录模式"), 6, 0)
         settings_layout.addWidget(self.output_mode_combo, 6, 1)
@@ -1512,6 +1540,7 @@ class MainWindow(QMainWindow):
             "translation_model": self.translation_model_input.text().strip(),
             "translation_bilingual": self.translation_bilingual_checkbox.isChecked(),
             "allow_subtitle_import": self.allow_subtitle_import_checkbox.isChecked(),
+            "subtitle_translation_thread_count": self.subtitle_translation_thread_spin.value(),
             "translation_openai_base": self.translation_openai_base_input.text().strip(),
             "translation_openai_key": self.translation_openai_key_input.text().strip(),
         }
@@ -1567,6 +1596,14 @@ class MainWindow(QMainWindow):
         self.allow_subtitle_import_checkbox.setChecked(
             bool(data.get("allow_subtitle_import", self.allow_subtitle_import_checkbox.isChecked()))
         )
+        subtitle_translation_thread_count = int(
+            data.get("subtitle_translation_thread_count", self.subtitle_translation_thread_spin.value())
+        )
+        subtitle_translation_thread_count = max(
+            self.subtitle_translation_thread_spin.minimum(),
+            min(self.subtitle_translation_thread_spin.maximum(), subtitle_translation_thread_count),
+        )
+        self.subtitle_translation_thread_spin.setValue(subtitle_translation_thread_count)
         self.translation_openai_base_input.setText(
             str(data.get("translation_openai_base", self.translation_openai_base_input.text()))
         )
@@ -1614,6 +1651,7 @@ class MainWindow(QMainWindow):
         self.translation_model_input.setEnabled(enable_translation)
         self.translation_bilingual_checkbox.setEnabled(enable_translation)
         self.allow_subtitle_import_checkbox.setEnabled(enable_translation)
+        self.subtitle_translation_thread_spin.setEnabled(enable_translation)
         self.translation_openai_base_input.setEnabled(use_openai_compatible)
         self.translation_openai_key_input.setEnabled(use_openai_compatible)
         self.show_openai_key_checkbox.setEnabled(use_openai_compatible)
@@ -1858,6 +1896,8 @@ class MainWindow(QMainWindow):
             translation_openai_base_url=translation_openai_base_url,
             translation_bilingual_srt=translation_bilingual_srt,
             allow_subtitle_import=allow_subtitle_import,
+            thread_count=self.thread_spin.value(),
+            subtitle_translation_thread_count=self.subtitle_translation_thread_spin.value(),
             save_srt=save_srt,
             save_txt=save_txt,
             save_json=save_json,
@@ -1917,7 +1957,7 @@ class MainWindow(QMainWindow):
         if settings.output_mode == "custom":
             settings.output_dir.mkdir(parents=True, exist_ok=True)
 
-        max_workers = self.thread_spin.value()
+        max_workers = settings.thread_count
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.cancel_event.clear()
 
