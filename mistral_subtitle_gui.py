@@ -71,6 +71,7 @@ AUDIO_EXTENSIONS = {
 }
 
 SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+SETTINGS_FILE = ".mistral_subtitle_gui_settings.json"
 STATUS_LABELS = {
     "Queued": "排队中",
     "Preparing": "准备中",
@@ -974,6 +975,16 @@ class MainWindow(QMainWindow):
 
         settings_page_layout.addWidget(settings_group)
         settings_page_layout.addWidget(translation_group)
+
+        settings_action_row = QWidget()
+        settings_action_layout = QHBoxLayout(settings_action_row)
+        settings_action_layout.setContentsMargins(0, 0, 0, 0)
+        settings_action_layout.addStretch(1)
+        self.save_settings_btn = QPushButton("保存设置")
+        self.save_settings_btn.clicked.connect(self.on_save_settings)
+        settings_action_layout.addWidget(self.save_settings_btn)
+        settings_page_layout.addWidget(settings_action_row)
+
         settings_page_layout.addStretch(1)
 
         tabs.addTab(task_page, "任务")
@@ -982,6 +993,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(tabs)
 
         self.setCentralWidget(root)
+        self.load_settings_from_disk()
         self.on_language_mode_changed()
         self.on_output_mode_changed()
         self.on_translation_mode_changed()
@@ -1069,6 +1081,109 @@ class MainWindow(QMainWindow):
 
     def log(self, message: str) -> None:
         self.log_text.appendPlainText(message)
+
+    def settings_file_path(self) -> Path:
+        return Path.cwd() / SETTINGS_FILE
+
+    def collect_ui_settings(self) -> Dict[str, Any]:
+        return {
+            "api_key": self.api_key_input.text().strip(),
+            "model": self.model_combo.currentText().strip(),
+            "language_mode_index": self.language_mode_combo.currentIndex(),
+            "language": self.language_input.text().strip(),
+            "timestamp": self.timestamp_combo.currentText().strip(),
+            "diarize": self.diarize_checkbox.isChecked(),
+            "thread_count": self.thread_spin.value(),
+            "output_mode_index": self.output_mode_combo.currentIndex(),
+            "output_dir": self.output_dir_input.text().strip(),
+            "context_bias": self.context_bias_input.toPlainText(),
+            "save_srt": self.save_srt_checkbox.isChecked(),
+            "save_txt": self.save_txt_checkbox.isChecked(),
+            "save_json": self.save_json_checkbox.isChecked(),
+            "translation_mode_index": self.translation_mode_combo.currentIndex(),
+            "translation_target": self.translation_target_input.text().strip(),
+            "translation_model": self.translation_model_input.text().strip(),
+            "translation_bilingual": self.translation_bilingual_checkbox.isChecked(),
+            "translation_openai_base": self.translation_openai_base_input.text().strip(),
+            "translation_openai_key": self.translation_openai_key_input.text().strip(),
+        }
+
+    def apply_ui_settings(self, data: Dict[str, Any]) -> None:
+        if not isinstance(data, dict):
+            return
+
+        self.api_key_input.setText(str(data.get("api_key", self.api_key_input.text())))
+
+        model = str(data.get("model", self.model_combo.currentText())).strip()
+        if model:
+            self.model_combo.setCurrentText(model)
+
+        language_mode_index = int(data.get("language_mode_index", self.language_mode_combo.currentIndex()))
+        self.language_mode_combo.setCurrentIndex(0 if language_mode_index not in (0, 1) else language_mode_index)
+
+        self.language_input.setText(str(data.get("language", self.language_input.text())))
+
+        timestamp = str(data.get("timestamp", self.timestamp_combo.currentText())).strip()
+        ts_index = self.timestamp_combo.findText(timestamp)
+        self.timestamp_combo.setCurrentIndex(ts_index if ts_index >= 0 else 0)
+
+        self.diarize_checkbox.setChecked(bool(data.get("diarize", self.diarize_checkbox.isChecked())))
+
+        thread_count = int(data.get("thread_count", self.thread_spin.value()))
+        thread_count = max(self.thread_spin.minimum(), min(self.thread_spin.maximum(), thread_count))
+        self.thread_spin.setValue(thread_count)
+
+        output_mode_index = int(data.get("output_mode_index", self.output_mode_combo.currentIndex()))
+        self.output_mode_combo.setCurrentIndex(0 if output_mode_index not in (0, 1) else output_mode_index)
+
+        self.output_dir_input.setText(str(data.get("output_dir", self.output_dir_input.text())))
+        self.context_bias_input.setPlainText(str(data.get("context_bias", self.context_bias_input.toPlainText())))
+
+        self.save_srt_checkbox.setChecked(bool(data.get("save_srt", self.save_srt_checkbox.isChecked())))
+        self.save_txt_checkbox.setChecked(bool(data.get("save_txt", self.save_txt_checkbox.isChecked())))
+        self.save_json_checkbox.setChecked(bool(data.get("save_json", self.save_json_checkbox.isChecked())))
+
+        translation_mode_index = int(data.get("translation_mode_index", self.translation_mode_combo.currentIndex()))
+        self.translation_mode_combo.setCurrentIndex(
+            0 if translation_mode_index not in (0, 1, 2) else translation_mode_index
+        )
+        self.translation_target_input.setText(
+            str(data.get("translation_target", self.translation_target_input.text()))
+        )
+        self.translation_model_input.setText(
+            str(data.get("translation_model", self.translation_model_input.text()))
+        )
+        self.translation_bilingual_checkbox.setChecked(
+            bool(data.get("translation_bilingual", self.translation_bilingual_checkbox.isChecked()))
+        )
+        self.translation_openai_base_input.setText(
+            str(data.get("translation_openai_base", self.translation_openai_base_input.text()))
+        )
+        self.translation_openai_key_input.setText(
+            str(data.get("translation_openai_key", self.translation_openai_key_input.text()))
+        )
+
+    def on_save_settings(self) -> None:
+        path = self.settings_file_path()
+        try:
+            data = self.collect_ui_settings()
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.log(f"设置已保存到：{path}")
+            QMessageBox.information(self, "保存成功", f"设置已保存到：\n{path}")
+        except Exception as exc:
+            QMessageBox.warning(self, "保存失败", f"无法保存设置：{exc}")
+
+    def load_settings_from_disk(self) -> None:
+        path = self.settings_file_path()
+        if not path.exists():
+            return
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+            self.apply_ui_settings(data)
+            self.log(f"已加载本地设置：{path}")
+        except Exception as exc:
+            self.log(f"加载设置失败（已忽略）：{exc}")
 
     def on_toggle_show_key(self, checked: bool) -> None:
         mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
