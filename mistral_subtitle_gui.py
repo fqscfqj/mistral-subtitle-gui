@@ -1,6 +1,7 @@
 ﻿
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -70,7 +71,14 @@ AUDIO_EXTENSIONS = {
     ".wma",
 }
 
-SUPPORTED_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+SUBTITLE_EXTENSIONS = {
+    ".srt",
+    ".vtt",
+    ".txt",
+}
+
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
+SUPPORTED_EXTENSIONS = MEDIA_EXTENSIONS | SUBTITLE_EXTENSIONS
 SETTINGS_FILE = ".mistral_subtitle_gui_settings.json"
 STATUS_LABELS = {
     "Queued": "排队中",
@@ -106,6 +114,7 @@ class TranscriptionSettings:
     translation_openai_api_key: str
     translation_openai_base_url: str
     translation_bilingual_srt: bool
+    allow_subtitle_import: bool
     save_srt: bool
     save_txt: bool
     save_json: bool
@@ -136,7 +145,7 @@ class DropFrame(QFrame):
         self.setAcceptDrops(True)
         self.setObjectName("dropFrame")
         layout = QVBoxLayout(self)
-        self.label = QLabel("将视频/音频文件或文件夹拖拽到这里")
+        self.label = QLabel("将视频/音频/字幕文件或文件夹拖拽到这里")
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.label)
 
@@ -236,6 +245,138 @@ def build_srt_text(segments: List[Dict[str, Any]], fallback_text: str) -> str:
     return "\n".join(lines)
 
 
+COMMON_LANGUAGE_CODES = {
+    "zh",
+    "en",
+    "ja",
+    "ko",
+    "fr",
+    "de",
+    "es",
+    "it",
+    "pt",
+    "ru",
+    "ar",
+    "hi",
+    "tr",
+    "th",
+    "vi",
+    "id",
+    "ms",
+    "pl",
+    "nl",
+    "sv",
+    "da",
+    "fi",
+    "no",
+    "cs",
+    "ro",
+    "hu",
+    "uk",
+}
+
+
+def parse_subtitle_timestamp(raw: str) -> float:
+    token = raw.strip().replace(",", ".")
+    if not token:
+        raise ValueError("空时间戳")
+    token = token.split(" ", 1)[0].strip()
+    parts = token.split(":")
+    if len(parts) == 3:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        seconds = float(parts[2])
+    elif len(parts) == 2:
+        hours = 0
+        minutes = int(parts[0])
+        seconds = float(parts[1])
+    else:
+        raise ValueError(f"非法时间戳: {raw}")
+    return hours * 3600.0 + minutes * 60.0 + seconds
+
+
+def parse_timed_subtitle_segments(raw_text: str) -> List[Dict[str, Any]]:
+    text = raw_text.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n")
+    blocks = re.split(r"\n\s*\n", text)
+    segments: List[Dict[str, Any]] = []
+
+    for block in blocks:
+        lines = [line.strip() for line in block.split("\n") if line.strip()]
+        if not lines:
+            continue
+        if lines[0].upper() == "WEBVTT":
+            continue
+        if len(lines) >= 2 and lines[0].isdigit():
+            lines = lines[1:]
+        if not lines:
+            continue
+
+        timing_index = -1
+        for idx, line in enumerate(lines):
+            if "-->" in line:
+                timing_index = idx
+                break
+        if timing_index < 0:
+            continue
+
+        timing_line = lines[timing_index]
+        parts = timing_line.split("-->", 1)
+        if len(parts) != 2:
+            continue
+        try:
+            start_sec = parse_subtitle_timestamp(parts[0])
+            end_sec = parse_subtitle_timestamp(parts[1])
+        except Exception:
+            continue
+
+        cue_lines = [line for line in lines[timing_index + 1 :] if line]
+        cue_text = "\n".join(cue_lines).strip()
+        if not cue_text:
+            continue
+        segments.append({"start": start_sec, "end": max(start_sec, end_sec), "text": cue_text})
+
+    return segments
+
+
+def read_text_with_fallback(path: Path) -> str:
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "cp1252"):
+        try:
+            return path.read_text(encoding=encoding)
+        except Exception:
+            continue
+    raise RuntimeError(f"无法读取文本文件编码: {path.name}")
+
+
+def infer_language_code_from_filename(path: Path) -> str:
+    stem_tokens = re.split(r"[.\-_ ]+", path.stem.strip())
+    for token in reversed(stem_tokens):
+        code = normalize_language_code(token)
+        if not code:
+            continue
+        if code in COMMON_LANGUAGE_CODES:
+            return code
+    return "und"
+
+
+def extract_subtitle_source(path: Path) -> tuple[List[Dict[str, Any]], str]:
+    raw = read_text_with_fallback(path)
+    ext = path.suffix.lower()
+
+    if ext in {".srt", ".vtt"}:
+        segments = parse_timed_subtitle_segments(raw)
+        if segments:
+            text = "\n".join(str(seg.get("text", "")).strip() for seg in segments if str(seg.get("text", "")).strip())
+            return segments, text.strip()
+
+    if ext == ".txt":
+        lines = [line.strip() for line in raw.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line.strip()]
+        text = "\n".join(lines).strip()
+        return [], text
+
+    plain = raw.strip()
+    return [], plain
+
+
 def extract_audio_with_ffmpeg(ffmpeg_path: str, input_file: Path, output_file: Path) -> None:
     cmd = [
         ffmpeg_path,
@@ -264,7 +405,7 @@ def extract_audio_with_ffmpeg(ffmpeg_path: str, input_file: Path, output_file: P
         raise RuntimeError(f"ffmpeg 执行失败: {result.stderr.strip()[-400:]}")
 
 
-def discover_media_files(folder: Path) -> List[Path]:
+def discover_supported_files(folder: Path) -> List[Path]:
     found: List[Path] = []
     for p in folder.rglob("*"):
         if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
@@ -657,10 +798,87 @@ def resolve_translation_base(
     source_stem: str,
     source_lang_code: str,
     target_lang_code: str,
+    force_target_suffix: bool = False,
 ) -> Path:
+    if force_target_suffix:
+        target_suffix = f".{target_lang_code}".casefold()
+        if source_stem.casefold().endswith(target_suffix):
+            return target_dir / f"{source_stem}.translated"
+        return target_dir / f"{source_stem}.{target_lang_code}"
     if source_lang_code == target_lang_code:
         return target_dir / f"{source_stem}.{target_lang_code}.translated"
     return target_dir / f"{source_stem}.{target_lang_code}"
+
+
+def write_translation_outputs(
+    target_dir: Path,
+    source_stem: str,
+    source_lang_code: str,
+    settings: TranscriptionSettings,
+    original_segments: List[Dict[str, Any]],
+    translated_segments: List[Dict[str, Any]],
+    translated_text: str,
+    source_path: Optional[Path] = None,
+    force_target_suffix: bool = False,
+) -> Dict[str, str]:
+    outputs: Dict[str, str] = {}
+    target_lang_code = normalize_language_code(settings.translation_target_language) or "tr"
+    trans_base = resolve_translation_base(
+        target_dir=target_dir,
+        source_stem=source_stem,
+        source_lang_code=source_lang_code,
+        target_lang_code=target_lang_code,
+        force_target_suffix=force_target_suffix,
+    )
+
+    def avoid_overwrite(path: Path) -> Path:
+        if source_path is None:
+            return path
+        try:
+            src_resolved = source_path.resolve()
+            dst_resolved = path.resolve()
+        except Exception:
+            src_resolved = source_path.absolute()
+            dst_resolved = path.absolute()
+        if str(src_resolved).casefold() == str(dst_resolved).casefold():
+            return path.with_name(f"{path.stem}.translated{path.suffix}")
+        return path
+
+    if settings.save_srt:
+        trans_srt_path = avoid_overwrite(trans_base.with_suffix(".srt"))
+        if translated_segments:
+            if settings.translation_bilingual_srt:
+                trans_srt_text = build_bilingual_srt_text(original_segments, translated_segments)
+            else:
+                trans_srt_text = build_srt_text(translated_segments, translated_text)
+        else:
+            trans_srt_text = build_srt_text([], translated_text)
+        trans_srt_path.write_text(trans_srt_text, encoding="utf-8")
+        outputs["srt_翻译"] = str(trans_srt_path)
+
+    if settings.save_txt:
+        trans_txt_path = avoid_overwrite(trans_base.with_suffix(".txt"))
+        trans_txt_path.write_text(translated_text or "", encoding="utf-8")
+        outputs["txt_翻译"] = str(trans_txt_path)
+
+    if settings.save_json:
+        trans_json_path = avoid_overwrite(trans_base.with_suffix(".json"))
+        trans_payload = {
+            "type": "translation",
+            "mode": settings.translation_mode,
+            "model": settings.translation_model,
+            "source_language": source_lang_code,
+            "target_language": target_lang_code,
+            "text": translated_text,
+            "segments": translated_segments,
+        }
+        trans_json_path.write_text(
+            json.dumps(trans_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        outputs["json_翻译"] = str(trans_json_path)
+
+    return outputs
 
 def transcribe_task(
     task_id: str,
@@ -680,6 +898,8 @@ def transcribe_task(
 
         report("Preparing", 5, "检查输入文件")
         source_ext = source_path.suffix.lower()
+        if source_ext not in MEDIA_EXTENSIONS:
+            raise RuntimeError("该文件类型不是音视频文件，无法执行转录")
         audio_path = source_path
 
         if source_ext in VIDEO_EXTENSIONS:
@@ -791,47 +1011,18 @@ def transcribe_task(
                 translated_text = translated_lines[0] if translated_lines else ""
 
             report("Writing", 96, "正在写入翻译文件")
-            target_lang_code = normalize_language_code(settings.translation_target_language) or "tr"
-            trans_base = resolve_translation_base(
-                target_dir=target_dir,
-                source_stem=source_path.stem,
-                source_lang_code=lang_code,
-                target_lang_code=target_lang_code,
-            )
-
-            if settings.save_srt:
-                trans_srt_path = trans_base.with_suffix(".srt")
-                if translated_segments:
-                    if settings.translation_bilingual_srt:
-                        trans_srt_text = build_bilingual_srt_text(original_segments, translated_segments)
-                    else:
-                        trans_srt_text = build_srt_text(translated_segments, translated_text)
-                else:
-                    trans_srt_text = build_srt_text([], translated_text)
-                trans_srt_path.write_text(trans_srt_text, encoding="utf-8")
-                outputs["srt_翻译"] = str(trans_srt_path)
-
-            if settings.save_txt:
-                trans_txt_path = trans_base.with_suffix(".txt")
-                trans_txt_path.write_text(translated_text or "", encoding="utf-8")
-                outputs["txt_翻译"] = str(trans_txt_path)
-
-            if settings.save_json:
-                trans_json_path = trans_base.with_suffix(".json")
-                trans_payload = {
-                    "type": "translation",
-                    "mode": settings.translation_mode,
-                    "model": settings.translation_model,
-                    "source_language": lang_code,
-                    "target_language": target_lang_code,
-                    "text": translated_text,
-                    "segments": translated_segments,
-                }
-                trans_json_path.write_text(
-                    json.dumps(trans_payload, ensure_ascii=False, indent=2),
-                    encoding="utf-8",
+            outputs.update(
+                write_translation_outputs(
+                    target_dir=target_dir,
+                    source_stem=source_path.stem,
+                    source_lang_code=lang_code,
+                    settings=settings,
+                    original_segments=original_segments,
+                    translated_segments=translated_segments,
+                    translated_text=translated_text,
+                    source_path=source_path,
                 )
-                outputs["json_翻译"] = str(trans_json_path)
+            )
 
         report("Completed", 100, "完成")
         signals.finished.emit(task_id, True, "Completed", "完成", outputs)
@@ -846,6 +1037,98 @@ def transcribe_task(
                 temp_audio.unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+def translate_subtitle_task(
+    task_id: str,
+    source_path: Path,
+    settings: TranscriptionSettings,
+    signals: WorkerSignals,
+    cancel_event: threading.Event,
+) -> None:
+    def report(status: str, progress: int, message: str) -> None:
+        signals.progress.emit(task_id, status, progress, message)
+
+    try:
+        if cancel_event.is_set():
+            raise TaskCancelled("启动前已取消")
+        if settings.translation_mode == "none":
+            raise RuntimeError("字幕导入任务需要启用翻译模式")
+
+        source_ext = source_path.suffix.lower()
+        if source_ext not in SUBTITLE_EXTENSIONS:
+            raise RuntimeError("该文件类型不是可导入字幕文件")
+
+        report("Preparing", 20, "读取字幕文件")
+        original_segments, original_text = extract_subtitle_source(source_path)
+
+        lines_for_translation: List[str]
+        if original_segments:
+            lines_for_translation = [str(seg.get("text", "")).strip() for seg in original_segments]
+            lines_for_translation = [line for line in lines_for_translation if line]
+        else:
+            lines_for_translation = [line.strip() for line in original_text.splitlines() if line.strip()]
+            if not lines_for_translation and original_text.strip():
+                lines_for_translation = [original_text.strip()]
+
+        if not lines_for_translation:
+            raise RuntimeError("字幕文件没有可翻译内容")
+
+        if settings.translation_mode == "mistral" and not settings.api_key:
+            raise RuntimeError("Mistral 翻译模式需要 MISTRAL_API_KEY")
+
+        report("Translating", 75, "正在翻译字幕")
+        translated_lines = translate_lines(
+            lines=lines_for_translation,
+            settings=settings,
+            transcribe_api_key=settings.api_key,
+            cancel_event=cancel_event,
+        )
+
+        translated_segments: List[Dict[str, Any]] = []
+        translated_text = "\n".join(translated_lines).strip()
+        if original_segments:
+            translated_segments = [dict(seg) for seg in original_segments]
+            for seg, translated_line in zip(translated_segments, translated_lines):
+                seg["text"] = translated_line
+
+        if cancel_event.is_set():
+            raise TaskCancelled("写入前已取消")
+
+        if settings.output_mode == "source":
+            target_dir = source_path.parent
+        else:
+            target_dir = settings.output_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+        source_lang_code = (
+            normalize_language_code(settings.language)
+            if settings.language_mode == "manual"
+            else infer_language_code_from_filename(source_path)
+        )
+        if not source_lang_code:
+            source_lang_code = "und"
+
+        report("Writing", 92, "正在写入翻译文件")
+        outputs = write_translation_outputs(
+            target_dir=target_dir,
+            source_stem=source_path.stem,
+            source_lang_code=source_lang_code,
+            settings=settings,
+            original_segments=original_segments,
+            translated_segments=translated_segments,
+            translated_text=translated_text,
+            source_path=source_path,
+            force_target_suffix=True,
+        )
+
+        report("Completed", 100, "完成")
+        signals.finished.emit(task_id, True, "Completed", "完成", outputs)
+    except TaskCancelled as exc:
+        signals.finished.emit(task_id, False, "Cancelled", str(exc), {})
+    except Exception as exc:
+        message = str(exc).strip() or traceback.format_exc(limit=1)
+        signals.finished.emit(task_id, False, "Failed", message, {})
 
 
 class MainWindow(QMainWindow):
@@ -1042,6 +1325,8 @@ class MainWindow(QMainWindow):
 
         self.translation_bilingual_checkbox = QCheckBox("SRT 输出双语（原文 + 译文）")
         self.translation_bilingual_checkbox.setChecked(True)
+        self.allow_subtitle_import_checkbox = QCheckBox("允许导入字幕文件并翻译")
+        self.allow_subtitle_import_checkbox.setChecked(True)
 
         self.translation_openai_base_input = QLineEdit("https://api.openai.com/v1")
         self.translation_openai_base_input.setPlaceholderText(
@@ -1068,10 +1353,11 @@ class MainWindow(QMainWindow):
         translation_layout.addWidget(QLabel("翻译模型"), 2, 0)
         translation_layout.addWidget(self.translation_model_input, 2, 1)
         translation_layout.addWidget(self.translation_bilingual_checkbox, 3, 0, 1, 2)
-        translation_layout.addWidget(QLabel("OpenAI 兼容 Base URL"), 4, 0)
-        translation_layout.addWidget(self.translation_openai_base_input, 4, 1)
-        translation_layout.addWidget(QLabel("OpenAI 兼容 API Key"), 5, 0)
-        translation_layout.addWidget(openai_key_row, 5, 1)
+        translation_layout.addWidget(self.allow_subtitle_import_checkbox, 4, 0, 1, 2)
+        translation_layout.addWidget(QLabel("OpenAI 兼容 Base URL"), 5, 0)
+        translation_layout.addWidget(self.translation_openai_base_input, 5, 1)
+        translation_layout.addWidget(QLabel("OpenAI 兼容 API Key"), 6, 0)
+        translation_layout.addWidget(openai_key_row, 6, 1)
 
         settings_layout.addWidget(QLabel("API 密钥"), 0, 0)
         settings_layout.addWidget(api_key_row, 0, 1)
@@ -1225,6 +1511,7 @@ class MainWindow(QMainWindow):
             "translation_target": self.translation_target_input.text().strip(),
             "translation_model": self.translation_model_input.text().strip(),
             "translation_bilingual": self.translation_bilingual_checkbox.isChecked(),
+            "allow_subtitle_import": self.allow_subtitle_import_checkbox.isChecked(),
             "translation_openai_base": self.translation_openai_base_input.text().strip(),
             "translation_openai_key": self.translation_openai_key_input.text().strip(),
         }
@@ -1277,6 +1564,9 @@ class MainWindow(QMainWindow):
         self.translation_bilingual_checkbox.setChecked(
             bool(data.get("translation_bilingual", self.translation_bilingual_checkbox.isChecked()))
         )
+        self.allow_subtitle_import_checkbox.setChecked(
+            bool(data.get("allow_subtitle_import", self.allow_subtitle_import_checkbox.isChecked()))
+        )
         self.translation_openai_base_input.setText(
             str(data.get("translation_openai_base", self.translation_openai_base_input.text()))
         )
@@ -1323,6 +1613,7 @@ class MainWindow(QMainWindow):
         self.translation_target_input.setEnabled(enable_translation)
         self.translation_model_input.setEnabled(enable_translation)
         self.translation_bilingual_checkbox.setEnabled(enable_translation)
+        self.allow_subtitle_import_checkbox.setEnabled(enable_translation)
         self.translation_openai_base_input.setEnabled(use_openai_compatible)
         self.translation_openai_key_input.setEnabled(use_openai_compatible)
         self.show_openai_key_checkbox.setEnabled(use_openai_compatible)
@@ -1355,10 +1646,10 @@ class MainWindow(QMainWindow):
 
     def on_add_file(self) -> None:
         filters = (
-            "媒体文件 (*.mp4 *.mov *.mkv *.avi *.wmv *.webm *.m4v *.flv *.ts "
-            "*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus *.wma)"
+            "媒体/字幕文件 (*.mp4 *.mov *.mkv *.avi *.wmv *.webm *.m4v *.flv *.ts "
+            "*.mp3 *.wav *.m4a *.aac *.flac *.ogg *.opus *.wma *.srt *.vtt *.txt)"
         )
-        files, _ = QFileDialog.getOpenFileNames(self, "选择媒体文件", str(Path.cwd()), filters)
+        files, _ = QFileDialog.getOpenFileNames(self, "选择媒体或字幕文件", str(Path.cwd()), filters)
         if files:
             self.add_paths(files)
 
@@ -1375,16 +1666,28 @@ class MainWindow(QMainWindow):
         return str(resolved).casefold()
 
     def add_paths(self, raw_paths: List[str]) -> None:
+        allow_subtitle_import = self.allow_subtitle_import_checkbox.isChecked()
         discovered: List[Path] = []
+        skipped_subtitle = 0
         for raw in raw_paths:
             p = Path(raw)
             if p.is_dir():
-                discovered.extend(discover_media_files(p))
+                for item in discover_supported_files(p):
+                    if item.suffix.lower() in SUBTITLE_EXTENSIONS and not allow_subtitle_import:
+                        skipped_subtitle += 1
+                        continue
+                    discovered.append(item)
             elif p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
+                if p.suffix.lower() in SUBTITLE_EXTENSIONS and not allow_subtitle_import:
+                    skipped_subtitle += 1
+                    continue
                 discovered.append(p)
 
         if not discovered:
-            self.log("未找到支持的媒体文件")
+            if skipped_subtitle > 0 and not allow_subtitle_import:
+                self.log("字幕导入开关已关闭，已忽略字幕文件")
+            else:
+                self.log("未找到支持的媒体或字幕文件")
             return
 
         added = 0
@@ -1417,6 +1720,8 @@ class MainWindow(QMainWindow):
             added += 1
 
         self.log(f"已添加 {added} 个文件")
+        if skipped_subtitle > 0 and not allow_subtitle_import:
+            self.log(f"已忽略 {skipped_subtitle} 个字幕文件（导入开关已关闭）")
         self.update_summary_text()
 
     def on_remove_selected(self) -> None:
@@ -1475,17 +1780,6 @@ class MainWindow(QMainWindow):
 
     def collect_settings(self) -> Optional[TranscriptionSettings]:
         api_key = self.api_key_input.text().strip()
-        if not api_key:
-            QMessageBox.warning(self, "缺少 API 密钥", "请输入 MISTRAL_API_KEY")
-            return None
-
-        if Mistral is None:
-            QMessageBox.warning(
-                self,
-                "缺少依赖",
-                "`mistralai` 未安装，请先安装 requirements.txt 中的依赖。",
-            )
-            return None
 
         model = self.model_combo.currentText().strip() or "voxtral-mini-latest"
         language_mode = "manual" if self.language_mode_combo.currentIndex() == 1 else "auto"
@@ -1505,6 +1799,7 @@ class MainWindow(QMainWindow):
         output_dir = Path(self.output_dir_input.text().strip() or str(Path.cwd() / "subtitles"))
         if output_mode == "custom":
             output_dir.mkdir(parents=True, exist_ok=True)
+        allow_subtitle_import = self.allow_subtitle_import_checkbox.isChecked()
 
         translation_mode_index = self.translation_mode_combo.currentIndex()
         translation_mode = {0: "none", 1: "mistral", 2: "openai"}.get(translation_mode_index, "none")
@@ -1525,6 +1820,17 @@ class MainWindow(QMainWindow):
         if translation_mode == "openai" and not translation_openai_api_key:
             QMessageBox.warning(self, "翻译设置无效", "OpenAI 兼容翻译模式需要填写 API Key")
             return None
+        if translation_mode == "mistral":
+            if not api_key:
+                QMessageBox.warning(self, "翻译设置无效", "Mistral 翻译模式需要填写 MISTRAL_API_KEY")
+                return None
+            if Mistral is None:
+                QMessageBox.warning(
+                    self,
+                    "缺少依赖",
+                    "`mistralai` 未安装，请先安装 requirements.txt 中的依赖。",
+                )
+                return None
 
         save_srt = self.save_srt_checkbox.isChecked()
         save_txt = self.save_txt_checkbox.isChecked()
@@ -1551,6 +1857,7 @@ class MainWindow(QMainWindow):
             translation_openai_api_key=translation_openai_api_key,
             translation_openai_base_url=translation_openai_base_url,
             translation_bilingual_srt=translation_bilingual_srt,
+            allow_subtitle_import=allow_subtitle_import,
             save_srt=save_srt,
             save_txt=save_txt,
             save_json=save_json,
@@ -1577,13 +1884,34 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "没有可执行任务", "当前没有可运行的排队/失败/取消任务")
             return
 
+        has_media = any(self.tasks[task_id].source_path.suffix.lower() in MEDIA_EXTENSIONS for task_id in run_ids)
+        has_subtitle = any(
+            self.tasks[task_id].source_path.suffix.lower() in SUBTITLE_EXTENSIONS for task_id in run_ids
+        )
         has_video = any(self.tasks[task_id].source_path.suffix.lower() in VIDEO_EXTENSIONS for task_id in run_ids)
+
+        if has_media and not settings.api_key:
+            QMessageBox.warning(self, "缺少 API 密钥", "音视频转录任务需要填写 MISTRAL_API_KEY")
+            return
+        if has_media and Mistral is None:
+            QMessageBox.warning(
+                self,
+                "缺少依赖",
+                "`mistralai` 未安装，请先安装 requirements.txt 中的依赖。",
+            )
+            return
         if has_video and not settings.ffmpeg_path:
             QMessageBox.warning(
                 self,
                 "缺少 ffmpeg",
                 "视频任务需要在 PATH 中提供 ffmpeg（或设置 FFMPEG_BINARY）",
             )
+            return
+        if has_subtitle and settings.translation_mode == "none":
+            QMessageBox.warning(self, "翻译未启用", "导入字幕任务需要启用翻译模式")
+            return
+        if has_subtitle and not settings.allow_subtitle_import:
+            QMessageBox.warning(self, "字幕导入已关闭", "请在设置中开启“允许导入字幕文件并翻译”")
             return
 
         if settings.output_mode == "custom":
@@ -1606,15 +1934,26 @@ class MainWindow(QMainWindow):
 
         for task_id in run_ids:
             task = self.tasks[task_id]
+            source_ext = task.source_path.suffix.lower()
             self.update_task_row(task_id, "Queued", 0, "等待执行")
-            future = self.executor.submit(
-                transcribe_task,
-                task_id,
-                task.source_path,
-                settings,
-                self.signals,
-                self.cancel_event,
-            )
+            if source_ext in SUBTITLE_EXTENSIONS:
+                future = self.executor.submit(
+                    translate_subtitle_task,
+                    task_id,
+                    task.source_path,
+                    settings,
+                    self.signals,
+                    self.cancel_event,
+                )
+            else:
+                future = self.executor.submit(
+                    transcribe_task,
+                    task_id,
+                    task.source_path,
+                    settings,
+                    self.signals,
+                    self.cancel_event,
+                )
             self.futures[task_id] = future
 
         self.log(f"已启动 {len(run_ids)} 个任务，线程数：{max_workers}")

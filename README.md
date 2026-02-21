@@ -6,6 +6,8 @@
 
 - 支持拖拽文件/文件夹
 - 可添加单个文件，或递归扫描整个文件夹
+- 支持导入字幕文件并直接翻译（`.srt` / `.vtt` / `.txt`）
+- 可在设置中开启/关闭“允许导入字幕文件并翻译”
 - 独立页面：`任务` 和 `设置`
 - 多线程任务执行（线程数可配置）
 - 支持单任务状态与进度 + 全局进度
@@ -34,7 +36,7 @@
 
 - Python 3.10+
 - `PATH` 中可用的 `ffmpeg`（处理视频文件时必需）
-- Mistral API 密钥（`MISTRAL_API_KEY`）
+- Mistral API 密钥（处理音视频转录，或使用 Mistral 翻译模式时必需）
 
 ## 安装
 
@@ -59,7 +61,7 @@ python mistral_subtitle_gui.py
 ## 环境变量
 
 - `MISTRAL_API_KEY`：启动时默认加载的 API 密钥
-- `OPENAI_API_KEY`：用于 OpenAI 兼容翻译的可选默认密钥
+- `OPENAI_API_KEY`：用于 OpenAI 兼容翻译的可选默认密钥（字幕导入翻译可仅使用该项）
 - `FFMPEG_BINARY`：可选，`ffmpeg` 可执行文件的绝对路径
 
 ## 输出
@@ -75,3 +77,4 @@ python mistral_subtitle_gui.py
 - 原文转写：`input_video.en.srt`（示例）
 - 翻译字幕：`input_video.zh.srt`
 - 若原语言与目标语言相同，翻译文件会使用 `.translated` 后缀避免覆盖（例如：`input_video.zh.translated.srt`）
+- 导入已有字幕翻译时，会额外生成目标语言文件（例如：`input_video.srt` -> `input_video.zh.srt`），不会覆盖原字幕
