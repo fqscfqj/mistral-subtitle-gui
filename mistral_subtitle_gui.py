@@ -709,7 +709,54 @@ def translate_lines(
     max_attempts = 3
     chunks: List[List[str]] = [lines[i : i + chunk_size] for i in range(0, len(lines), chunk_size)]
 
-    def translate_chunk(chunk: List[str]) -> List[str]:
+    def call_translation_api(user_prompt: str) -> str:
+        if settings.translation_mode == "mistral":
+            return call_mistral_chat(
+                api_key=transcribe_api_key,
+                model=settings.translation_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        if settings.translation_mode == "openai":
+            return call_openai_compatible_chat(
+                base_url=settings.translation_openai_base_url,
+                api_key=settings.translation_openai_api_key,
+                model=settings.translation_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        raise RuntimeError("未知翻译模式")
+
+    def translate_single_line(line: str) -> List[str]:
+        last_content = ""
+        last_error = ""
+        for attempt in range(1, max_attempts + 2):
+            user_prompt = (
+                f"请把以下单条字幕翻译为 `{target_lang}`。"
+                "只返回 JSON 字符串数组，且长度必须为 1。"
+                "禁止代码块、禁止解释、禁止额外字段。"
+                f"\n输入：{json.dumps([line], ensure_ascii=False)}"
+            )
+            content = call_translation_api(user_prompt)
+            last_content = content
+            try:
+                parsed = parse_json_array_output(content)
+                if not parsed:
+                    raise RuntimeError("翻译结果为空")
+                # 单条字幕场景下兜底取第一条，避免模型偶发多返回导致任务整体失败。
+                return [str(parsed[0]).strip()]
+            except Exception as exc:
+                last_error = str(exc).strip() or "未知错误"
+                if attempt >= max_attempts + 1:
+                    preview = last_content.strip().replace("\n", " ")
+                    if len(preview) > 220:
+                        preview = preview[:220] + "..."
+                    raise RuntimeError(
+                        f"单条字幕翻译失败：{last_error} | 返回片段：{preview}"
+                    )
+        raise RuntimeError("单条字幕翻译失败：未获得有效结果")
+
+    def translate_chunk(chunk: List[str], depth: int = 0) -> List[str]:
         if cancel_event.is_set():
             raise TaskCancelled("翻译前已取消")
 
@@ -733,43 +780,30 @@ def translate_lines(
                     f"\n上一次输出：{last_content[:800]}"
                 )
 
-            if settings.translation_mode == "mistral":
-                content = call_mistral_chat(
-                    api_key=transcribe_api_key,
-                    model=settings.translation_model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                )
-            elif settings.translation_mode == "openai":
-                content = call_openai_compatible_chat(
-                    base_url=settings.translation_openai_base_url,
-                    api_key=settings.translation_openai_api_key,
-                    model=settings.translation_model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                )
-            else:
-                raise RuntimeError("未知翻译模式")
-
+            content = call_translation_api(user_prompt)
             last_content = content
             try:
                 translated = parse_json_array_output(content)
                 if len(translated) != len(chunk):
-                    raise RuntimeError("翻译结果条数与原字幕不一致")
+                    raise RuntimeError(
+                        f"翻译结果条数与原字幕不一致（期望 {len(chunk)}，实际 {len(translated)}）"
+                    )
                 translated_chunk = translated
                 break
             except Exception as exc:
                 last_error = str(exc).strip() or "未知错误"
-                if attempt >= max_attempts:
-                    preview = content.strip().replace("\n", " ")
-                    if len(preview) > 220:
-                        preview = preview[:220] + "..."
-                    raise RuntimeError(
-                        f"翻译结果格式错误，已重试 {max_attempts} 次：{last_error} | 返回片段：{preview}"
-                    )
+                if attempt < max_attempts:
+                    continue
 
         if translated_chunk is None:
-            raise RuntimeError("翻译失败：未获得有效结果")
+            if len(chunk) <= 1:
+                return translate_single_line(chunk[0] if chunk else "")
+            mid = len(chunk) // 2
+            if mid <= 0 or mid >= len(chunk):
+                mid = 1
+            left = translate_chunk(chunk[:mid], depth + 1)
+            right = translate_chunk(chunk[mid:], depth + 1)
+            return left + right
         return translated_chunk
 
     workers = max(1, int(parallel_workers))
