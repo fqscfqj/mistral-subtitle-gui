@@ -15,6 +15,11 @@ A PySide6 desktop app for generating subtitles from video/audio files using Mist
   - `timestamp_granularities` (`none`, `segment`, `word`)
   - `diarize`
   - `context_bias`
+- Optional subtitle translation:
+  - no translation / Mistral API / OpenAI-compatible API
+  - OpenAI-compatible `base_url` + `api_key` (supports third-party providers)
+  - target language code
+  - bilingual SRT output (source + translated line)
 - Output directory mode:
   - use source file directory
   - use custom directory
@@ -54,6 +59,7 @@ python mistral_subtitle_gui.py
 ## Environment variables
 
 - `MISTRAL_API_KEY`: default API key loaded at startup
+- `OPENAI_API_KEY`: optional default key for OpenAI-compatible translation
 - `FFMPEG_BINARY`: optional absolute path to ffmpeg executable
 
 ## Output
@@ -63,3 +69,9 @@ Outputs are named with source stem + language code suffix:
 - `input_video.zh.srt`
 - `input_video.zh.txt`
 - `input_video.zh.json`
+
+When translation is enabled:
+
+- source transcript: `input_video.en.srt` (example)
+- translated subtitle: `input_video.zh.srt`
+- if source and target language are the same, translated files use `.translated` to avoid overwrite (e.g. `input_video.zh.translated.srt`)

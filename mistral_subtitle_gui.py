@@ -7,6 +7,8 @@ import sys
 import tempfile
 import threading
 import traceback
+import urllib.error
+import urllib.request
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -74,6 +76,7 @@ STATUS_LABELS = {
     "Preparing": "准备中",
     "Extracting": "提取音频",
     "Transcribing": "转写中",
+    "Translating": "翻译中",
     "Writing": "写入文件",
     "Completed": "已完成",
     "Failed": "失败",
@@ -96,6 +99,12 @@ class TranscriptionSettings:
     context_bias: str
     output_mode: str
     output_dir: Path
+    translation_mode: str
+    translation_model: str
+    translation_target_language: str
+    translation_openai_api_key: str
+    translation_openai_base_url: str
+    translation_bilingual_srt: bool
     save_srt: bool
     save_txt: bool
     save_json: bool
@@ -307,6 +316,233 @@ def detect_language_code(payload: Dict[str, Any]) -> str:
             return code
     return "und"
 
+
+def normalize_openai_base_url(base_url: str) -> str:
+    url = base_url.strip()
+    if not url:
+        return "https://api.openai.com/v1"
+    if url.endswith("/chat/completions"):
+        return url
+    url = url.rstrip("/")
+    if not url.endswith("/v1"):
+        url = f"{url}/v1"
+    return f"{url}/chat/completions"
+
+
+def is_chinese_language(lang_code: str) -> bool:
+    norm = normalize_language_code(lang_code)
+    return norm in {"zh", "zho", "chi", "cn"}
+
+
+def extract_chat_text(payload: Dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message")
+            if isinstance(message, dict):
+                content = message.get("content")
+                if isinstance(content, str):
+                    return content.strip()
+                if isinstance(content, list):
+                    parts: List[str] = []
+                    for item in content:
+                        if isinstance(item, dict):
+                            text = item.get("text")
+                            if isinstance(text, str):
+                                parts.append(text)
+                    if parts:
+                        return "\n".join(parts).strip()
+    return ""
+
+
+def parse_json_array_output(raw_text: str) -> List[str]:
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 2:
+            text = "\n".join(lines[1:-1]).strip()
+
+    parsed: Any = None
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        start = text.find("[")
+        end = text.rfind("]")
+        if start >= 0 and end > start:
+            snippet = text[start : end + 1]
+            parsed = json.loads(snippet)
+        else:
+            raise RuntimeError("翻译结果不是有效 JSON 数组")
+
+    if not isinstance(parsed, list):
+        raise RuntimeError("翻译结果不是数组格式")
+    return [str(item).strip() for item in parsed]
+
+
+def call_openai_compatible_chat(
+    base_url: str,
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> str:
+    endpoint = normalize_openai_base_url(base_url)
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.2,
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        endpoint,
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            raw = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"OpenAI 兼容接口返回错误: HTTP {exc.code} {detail[:240]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"OpenAI 兼容接口连接失败: {exc.reason}")
+
+    response_payload = json.loads(raw)
+    content = extract_chat_text(response_payload)
+    if not content:
+        raise RuntimeError("OpenAI 兼容接口未返回可用文本")
+    return content
+
+
+def call_mistral_chat(
+    api_key: str,
+    model: str,
+    system_prompt: str,
+    user_prompt: str,
+) -> str:
+    if Mistral is None:
+        raise RuntimeError("缺少依赖：mistralai")
+    client = Mistral(api_key=api_key)
+    response = client.chat.complete(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.2,
+    )
+    payload = normalize_response(response)
+    content = extract_chat_text(payload)
+    if not content:
+        raise RuntimeError("Mistral 翻译接口未返回可用文本")
+    return content
+
+
+def translate_lines(
+    lines: List[str],
+    settings: TranscriptionSettings,
+    transcribe_api_key: str,
+    cancel_event: threading.Event,
+) -> List[str]:
+    if not lines:
+        return []
+
+    target_lang = settings.translation_target_language
+    zh_target = is_chinese_language(target_lang)
+    if zh_target:
+        style_instruction = (
+            "目标语言为简体中文。请采用自然口语字幕风格，避免生硬直译；"
+            "中文标点规范；保留专有名词/缩写/数字单位；语气符合中文语境。"
+        )
+    else:
+        style_instruction = "请使用地道自然的目标语言表达，避免逐词直译。"
+
+    system_prompt = (
+        "你是专业字幕翻译。"
+        "你将收到一个 JSON 字符串数组，必须逐条翻译并保持数组长度和顺序完全一致。"
+        "不要添加解释、不要输出 Markdown、不要输出额外字段，只返回 JSON 数组。"
+        f"{style_instruction}"
+    )
+
+    result: List[str] = []
+    chunk_size = 40
+
+    for i in range(0, len(lines), chunk_size):
+        if cancel_event.is_set():
+            raise TaskCancelled("翻译前已取消")
+
+        chunk = lines[i : i + chunk_size]
+        user_prompt = (
+            f"请把以下字幕翻译为 `{target_lang}`。"
+            "请直接返回 JSON 数组，每个元素对应一条翻译，不得缺失。"
+            f"\n输入：{json.dumps(chunk, ensure_ascii=False)}"
+        )
+
+        if settings.translation_mode == "mistral":
+            content = call_mistral_chat(
+                api_key=transcribe_api_key,
+                model=settings.translation_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        elif settings.translation_mode == "openai":
+            content = call_openai_compatible_chat(
+                base_url=settings.translation_openai_base_url,
+                api_key=settings.translation_openai_api_key,
+                model=settings.translation_model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+        else:
+            raise RuntimeError("未知翻译模式")
+
+        translated = parse_json_array_output(content)
+        if len(translated) != len(chunk):
+            raise RuntimeError("翻译结果条数与原字幕不一致")
+        result.extend(translated)
+
+    return result
+
+
+def build_bilingual_srt_text(
+    original_segments: List[Dict[str, Any]],
+    translated_segments: List[Dict[str, Any]],
+) -> str:
+    if not original_segments or not translated_segments:
+        return ""
+    if len(original_segments) != len(translated_segments):
+        raise RuntimeError("双语字幕生成失败：原文和译文段落数量不一致")
+
+    lines: List[str] = []
+    for idx, (orig, trans) in enumerate(zip(original_segments, translated_segments), start=1):
+        start = format_srt_timestamp(float(orig["start"]))
+        end = format_srt_timestamp(float(orig["end"]))
+        speaker = orig.get("speaker")
+        prefix = f"[{speaker}] " if speaker not in (None, "") else ""
+        orig_text = (prefix + str(orig.get("text", "")).strip()).strip() or "..."
+        trans_text = (prefix + str(trans.get("text", "")).strip()).strip() or "..."
+        lines.append(f"{idx}\n{start} --> {end}\n{orig_text}\n{trans_text}\n")
+    return "\n".join(lines)
+
+
+def resolve_translation_base(
+    target_dir: Path,
+    source_stem: str,
+    source_lang_code: str,
+    target_lang_code: str,
+) -> Path:
+    if source_lang_code == target_lang_code:
+        return target_dir / f"{source_stem}.{target_lang_code}.translated"
+    return target_dir / f"{source_stem}.{target_lang_code}"
+
 def transcribe_task(
     task_id: str,
     source_path: Path,
@@ -364,10 +600,11 @@ def transcribe_task(
                 **kwargs,
             )
 
-        report("Writing", 85, "正在生成字幕文件")
+        report("Writing", 85, "正在生成转写文件")
         payload = normalize_response(response)
         text = extract_text(payload)
         segments = extract_segments(payload)
+        original_segments = [dict(seg) for seg in segments]
 
         if cancel_event.is_set():
             raise TaskCancelled("写入前已取消")
@@ -404,6 +641,78 @@ def transcribe_task(
             json_path = out_base.with_suffix(".json")
             json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             outputs["json"] = str(json_path)
+
+        if settings.translation_mode != "none":
+            if cancel_event.is_set():
+                raise TaskCancelled("翻译前已取消")
+
+            report("Translating", 90, "正在翻译字幕")
+            lines_for_translation = [str(seg.get("text", "")).strip() for seg in original_segments]
+            translated_segments: List[Dict[str, Any]] = []
+            translated_text = ""
+
+            if lines_for_translation:
+                translated_lines = translate_lines(
+                    lines=lines_for_translation,
+                    settings=settings,
+                    transcribe_api_key=settings.api_key,
+                    cancel_event=cancel_event,
+                )
+                translated_segments = [dict(seg) for seg in original_segments]
+                for seg, translated_line in zip(translated_segments, translated_lines):
+                    seg["text"] = translated_line
+                translated_text = "\n".join(translated_lines).strip()
+            elif text.strip():
+                translated_lines = translate_lines(
+                    lines=[text],
+                    settings=settings,
+                    transcribe_api_key=settings.api_key,
+                    cancel_event=cancel_event,
+                )
+                translated_text = translated_lines[0] if translated_lines else ""
+
+            report("Writing", 96, "正在写入翻译文件")
+            target_lang_code = normalize_language_code(settings.translation_target_language) or "tr"
+            trans_base = resolve_translation_base(
+                target_dir=target_dir,
+                source_stem=source_path.stem,
+                source_lang_code=lang_code,
+                target_lang_code=target_lang_code,
+            )
+
+            if settings.save_srt:
+                trans_srt_path = trans_base.with_suffix(".srt")
+                if translated_segments:
+                    if settings.translation_bilingual_srt:
+                        trans_srt_text = build_bilingual_srt_text(original_segments, translated_segments)
+                    else:
+                        trans_srt_text = build_srt_text(translated_segments, translated_text)
+                else:
+                    trans_srt_text = build_srt_text([], translated_text)
+                trans_srt_path.write_text(trans_srt_text, encoding="utf-8")
+                outputs["srt_翻译"] = str(trans_srt_path)
+
+            if settings.save_txt:
+                trans_txt_path = trans_base.with_suffix(".txt")
+                trans_txt_path.write_text(translated_text or "", encoding="utf-8")
+                outputs["txt_翻译"] = str(trans_txt_path)
+
+            if settings.save_json:
+                trans_json_path = trans_base.with_suffix(".json")
+                trans_payload = {
+                    "type": "translation",
+                    "mode": settings.translation_mode,
+                    "model": settings.translation_model,
+                    "source_language": lang_code,
+                    "target_language": target_lang_code,
+                    "text": translated_text,
+                    "segments": translated_segments,
+                }
+                trans_json_path.write_text(
+                    json.dumps(trans_payload, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                outputs["json_翻译"] = str(trans_json_path)
 
         report("Completed", 100, "完成")
         signals.finished.emit(task_id, True, "Completed", "完成", outputs)
@@ -594,6 +903,54 @@ class MainWindow(QMainWindow):
         format_row_layout.addWidget(self.save_json_checkbox)
         format_row_layout.addStretch(1)
 
+        translation_group = QGroupBox("字幕翻译设置")
+        translation_layout = QGridLayout(translation_group)
+
+        self.translation_mode_combo = QComboBox()
+        self.translation_mode_combo.addItems(
+            ["不翻译", "Mistral API 翻译", "OpenAI 兼容 API 翻译"]
+        )
+        self.translation_mode_combo.currentIndexChanged.connect(self.on_translation_mode_changed)
+
+        self.translation_target_input = QLineEdit("zh")
+        self.translation_target_input.setPlaceholderText("目标语言代码，例如 zh / en / ja")
+
+        self.translation_model_input = QLineEdit("mistral-small-latest")
+        self.translation_model_input.setPlaceholderText("翻译模型名称")
+
+        self.translation_bilingual_checkbox = QCheckBox("SRT 输出双语（原文 + 译文）")
+        self.translation_bilingual_checkbox.setChecked(True)
+
+        self.translation_openai_base_input = QLineEdit("https://api.openai.com/v1")
+        self.translation_openai_base_input.setPlaceholderText(
+            "OpenAI 兼容地址，例如 https://api.openai.com/v1"
+        )
+
+        self.translation_openai_key_input = QLineEdit(os.environ.get("OPENAI_API_KEY", ""))
+        self.translation_openai_key_input.setPlaceholderText("OpenAI/第三方兼容 API Key")
+        self.translation_openai_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+        self.show_openai_key_checkbox = QCheckBox("显示")
+        self.show_openai_key_checkbox.toggled.connect(self.on_toggle_show_openai_key)
+
+        openai_key_row = QWidget()
+        openai_key_row_layout = QHBoxLayout(openai_key_row)
+        openai_key_row_layout.setContentsMargins(0, 0, 0, 0)
+        openai_key_row_layout.addWidget(self.translation_openai_key_input)
+        openai_key_row_layout.addWidget(self.show_openai_key_checkbox)
+
+        translation_layout.addWidget(QLabel("翻译模式"), 0, 0)
+        translation_layout.addWidget(self.translation_mode_combo, 0, 1)
+        translation_layout.addWidget(QLabel("目标语言"), 1, 0)
+        translation_layout.addWidget(self.translation_target_input, 1, 1)
+        translation_layout.addWidget(QLabel("翻译模型"), 2, 0)
+        translation_layout.addWidget(self.translation_model_input, 2, 1)
+        translation_layout.addWidget(self.translation_bilingual_checkbox, 3, 0, 1, 2)
+        translation_layout.addWidget(QLabel("OpenAI 兼容 Base URL"), 4, 0)
+        translation_layout.addWidget(self.translation_openai_base_input, 4, 1)
+        translation_layout.addWidget(QLabel("OpenAI 兼容 API Key"), 5, 0)
+        translation_layout.addWidget(openai_key_row, 5, 1)
+
         settings_layout.addWidget(QLabel("API 密钥"), 0, 0)
         settings_layout.addWidget(api_key_row, 0, 1)
         settings_layout.addWidget(QLabel("模型"), 1, 0)
@@ -616,6 +973,7 @@ class MainWindow(QMainWindow):
         settings_layout.addWidget(format_row, 10, 0, 1, 2)
 
         settings_page_layout.addWidget(settings_group)
+        settings_page_layout.addWidget(translation_group)
         settings_page_layout.addStretch(1)
 
         tabs.addTab(task_page, "任务")
@@ -626,6 +984,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         self.on_language_mode_changed()
         self.on_output_mode_changed()
+        self.on_translation_mode_changed()
         self.apply_style()
 
     def apply_style(self) -> None:
@@ -714,6 +1073,28 @@ class MainWindow(QMainWindow):
     def on_toggle_show_key(self, checked: bool) -> None:
         mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
         self.api_key_input.setEchoMode(mode)
+
+    def on_toggle_show_openai_key(self, checked: bool) -> None:
+        mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+        self.translation_openai_key_input.setEchoMode(mode)
+
+    def on_translation_mode_changed(self) -> None:
+        mode = self.translation_mode_combo.currentIndex()
+        enable_translation = mode != 0
+        use_openai_compatible = mode == 2
+        current_model = self.translation_model_input.text().strip()
+
+        self.translation_target_input.setEnabled(enable_translation)
+        self.translation_model_input.setEnabled(enable_translation)
+        self.translation_bilingual_checkbox.setEnabled(enable_translation)
+        self.translation_openai_base_input.setEnabled(use_openai_compatible)
+        self.translation_openai_key_input.setEnabled(use_openai_compatible)
+        self.show_openai_key_checkbox.setEnabled(use_openai_compatible)
+
+        if mode == 1 and current_model in {"", "gpt-4o-mini"}:
+            self.translation_model_input.setText("mistral-small-latest")
+        if mode == 2 and current_model in {"", "mistral-small-latest"}:
+            self.translation_model_input.setText("gpt-4o-mini")
 
     def on_language_mode_changed(self) -> None:
         manual = self.language_mode_combo.currentIndex() == 1
@@ -889,6 +1270,26 @@ class MainWindow(QMainWindow):
         if output_mode == "custom":
             output_dir.mkdir(parents=True, exist_ok=True)
 
+        translation_mode_index = self.translation_mode_combo.currentIndex()
+        translation_mode = {0: "none", 1: "mistral", 2: "openai"}.get(translation_mode_index, "none")
+        translation_model = self.translation_model_input.text().strip()
+        translation_target_language = normalize_language_code(self.translation_target_input.text().strip())
+        translation_openai_base_url = self.translation_openai_base_input.text().strip() or "https://api.openai.com/v1"
+        translation_openai_api_key = self.translation_openai_key_input.text().strip()
+        translation_bilingual_srt = self.translation_bilingual_checkbox.isChecked()
+
+        if translation_mode != "none":
+            if not translation_target_language:
+                QMessageBox.warning(self, "翻译设置无效", "请填写目标语言代码，例如 zh / en / ja")
+                return None
+            if not translation_model:
+                QMessageBox.warning(self, "翻译设置无效", "请填写翻译模型名称")
+                return None
+
+        if translation_mode == "openai" and not translation_openai_api_key:
+            QMessageBox.warning(self, "翻译设置无效", "OpenAI 兼容翻译模式需要填写 API Key")
+            return None
+
         save_srt = self.save_srt_checkbox.isChecked()
         save_txt = self.save_txt_checkbox.isChecked()
         save_json = self.save_json_checkbox.isChecked()
@@ -908,6 +1309,12 @@ class MainWindow(QMainWindow):
             context_bias=context_bias,
             output_mode=output_mode,
             output_dir=output_dir,
+            translation_mode=translation_mode,
+            translation_model=translation_model,
+            translation_target_language=translation_target_language,
+            translation_openai_api_key=translation_openai_api_key,
+            translation_openai_base_url=translation_openai_base_url,
+            translation_bilingual_srt=translation_bilingual_srt,
             save_srt=save_srt,
             save_txt=save_txt,
             save_json=save_json,
