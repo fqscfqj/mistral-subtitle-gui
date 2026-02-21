@@ -118,6 +118,7 @@ class TranscriptionSettings:
     thread_count: int
     subtitle_translation_thread_count: int
     save_srt: bool
+    save_lrc: bool
     save_txt: bool
     save_json: bool
     ffmpeg_path: str
@@ -187,6 +188,15 @@ def format_srt_timestamp(seconds: float) -> str:
     return f"{hours:02}:{minutes:02}:{secs:02},{ms:03}"
 
 
+def format_lrc_timestamp(seconds: float) -> str:
+    centiseconds = max(0, int(round(seconds * 100.0)))
+    minutes = centiseconds // 6000
+    centiseconds %= 6000
+    secs = centiseconds // 100
+    centiseconds %= 100
+    return f"{minutes:02}:{secs:02}.{centiseconds:02}"
+
+
 def normalize_response(response: Any) -> Dict[str, Any]:
     if isinstance(response, dict):
         return response
@@ -245,6 +255,23 @@ def build_srt_text(segments: List[Dict[str, Any]], fallback_text: str) -> str:
         text = (prefix + str(seg.get("text", "")).strip()).strip() or "..."
         lines.append(f"{idx}\n{start} --> {end}\n{text}\n")
     return "\n".join(lines)
+
+
+def build_lrc_text(segments: List[Dict[str, Any]], fallback_text: str) -> str:
+    if not segments:
+        text = fallback_text.strip() or "(无转写内容)"
+        text = re.sub(r"\s+", " ", text)
+        return f"[00:00.00]{text}\n"
+
+    lines: List[str] = []
+    for seg in segments:
+        start = format_lrc_timestamp(float(seg["start"]))
+        speaker = seg.get("speaker")
+        prefix = f"[{speaker}] " if speaker not in (None, "") else ""
+        text = (prefix + str(seg.get("text", "")).strip()).strip() or "..."
+        text = re.sub(r"\s*\n\s*", " / ", text)
+        lines.append(f"[{start}]{text}")
+    return "\n".join(lines) + "\n"
 
 
 COMMON_LANGUAGE_CODES = {
@@ -358,6 +385,20 @@ def infer_language_code_from_filename(path: Path) -> str:
         if code in COMMON_LANGUAGE_CODES:
             return code
     return "und"
+
+
+def trim_language_suffix_from_stem(source_stem: str, language_code: str) -> str:
+    code = normalize_language_code(language_code)
+    if not code or code == "und":
+        return source_stem
+
+    stem_fold = source_stem.casefold()
+    suffixes = [f".{code}", f"_{code}", f"-{code}", f" {code}"]
+    for suffix in suffixes:
+        if stem_fold.endswith(suffix.casefold()):
+            trimmed = source_stem[: -len(suffix)].rstrip(" ._-")
+            return trimmed or source_stem
+    return source_stem
 
 
 def extract_subtitle_source(path: Path) -> tuple[List[Dict[str, Any]], str]:
@@ -876,6 +917,7 @@ def write_translation_outputs(
     translated_text: str,
     source_path: Optional[Path] = None,
     force_target_suffix: bool = False,
+    write_lrc: bool = False,
 ) -> Dict[str, str]:
     outputs: Dict[str, str] = {}
     target_lang_code = normalize_language_code(settings.translation_target_language) or "tr"
@@ -911,6 +953,12 @@ def write_translation_outputs(
             trans_srt_text = build_srt_text([], translated_text)
         trans_srt_path.write_text(trans_srt_text, encoding="utf-8")
         outputs["srt_翻译"] = str(trans_srt_path)
+
+    if write_lrc:
+        trans_lrc_path = avoid_overwrite(trans_base.with_suffix(".lrc"))
+        trans_lrc_text = build_lrc_text(translated_segments, translated_text)
+        trans_lrc_path.write_text(trans_lrc_text, encoding="utf-8")
+        outputs["lrc_翻译"] = str(trans_lrc_path)
 
     if settings.save_txt:
         trans_txt_path = avoid_overwrite(trans_base.with_suffix(".txt"))
@@ -956,6 +1004,7 @@ def transcribe_task(
         source_ext = source_path.suffix.lower()
         if source_ext not in MEDIA_EXTENSIONS:
             raise RuntimeError("该文件类型不是音视频文件，无法执行转录")
+        is_audio_input = source_ext in AUDIO_EXTENSIONS
         audio_path = source_path
 
         if source_ext in VIDEO_EXTENSIONS:
@@ -1027,6 +1076,12 @@ def transcribe_task(
             srt_path.write_text(srt_text, encoding="utf-8")
             outputs["srt"] = str(srt_path)
 
+        if settings.save_lrc and is_audio_input:
+            lrc_path = out_base.with_suffix(".lrc")
+            lrc_text = build_lrc_text(segments, text)
+            lrc_path.write_text(lrc_text, encoding="utf-8")
+            outputs["lrc"] = str(lrc_path)
+
         if settings.save_txt:
             txt_path = out_base.with_suffix(".txt")
             txt_path.write_text(text or "", encoding="utf-8")
@@ -1077,6 +1132,7 @@ def transcribe_task(
                     translated_segments=translated_segments,
                     translated_text=translated_text,
                     source_path=source_path,
+                    write_lrc=settings.save_lrc and is_audio_input,
                 )
             )
 
@@ -1165,11 +1221,12 @@ def translate_subtitle_task(
         )
         if not source_lang_code:
             source_lang_code = "und"
+        output_source_stem = trim_language_suffix_from_stem(source_path.stem, source_lang_code)
 
         report("Writing", 92, "正在写入翻译文件")
         outputs = write_translation_outputs(
             target_dir=target_dir,
-            source_stem=source_path.stem,
+            source_stem=output_source_stem,
             source_lang_code=source_lang_code,
             settings=settings,
             original_segments=original_segments,
@@ -1353,6 +1410,8 @@ class MainWindow(QMainWindow):
 
         self.save_srt_checkbox = QCheckBox("保存 .srt")
         self.save_srt_checkbox.setChecked(True)
+        self.save_lrc_checkbox = QCheckBox("纯音频保存 .lrc")
+        self.save_lrc_checkbox.setChecked(True)
         self.save_txt_checkbox = QCheckBox("保存 .txt")
         self.save_txt_checkbox.setChecked(True)
         self.save_json_checkbox = QCheckBox("保存 .json")
@@ -1361,6 +1420,7 @@ class MainWindow(QMainWindow):
         format_row_layout = QHBoxLayout(format_row)
         format_row_layout.setContentsMargins(0, 0, 0, 0)
         format_row_layout.addWidget(self.save_srt_checkbox)
+        format_row_layout.addWidget(self.save_lrc_checkbox)
         format_row_layout.addWidget(self.save_txt_checkbox)
         format_row_layout.addWidget(self.save_json_checkbox)
         format_row_layout.addStretch(1)
@@ -1567,6 +1627,7 @@ class MainWindow(QMainWindow):
             "output_dir": self.output_dir_input.text().strip(),
             "context_bias": self.context_bias_input.toPlainText(),
             "save_srt": self.save_srt_checkbox.isChecked(),
+            "save_lrc": self.save_lrc_checkbox.isChecked(),
             "save_txt": self.save_txt_checkbox.isChecked(),
             "save_json": self.save_json_checkbox.isChecked(),
             "translation_mode_index": self.translation_mode_combo.currentIndex(),
@@ -1611,6 +1672,7 @@ class MainWindow(QMainWindow):
         self.context_bias_input.setPlainText(str(data.get("context_bias", self.context_bias_input.toPlainText())))
 
         self.save_srt_checkbox.setChecked(bool(data.get("save_srt", self.save_srt_checkbox.isChecked())))
+        self.save_lrc_checkbox.setChecked(bool(data.get("save_lrc", self.save_lrc_checkbox.isChecked())))
         self.save_txt_checkbox.setChecked(bool(data.get("save_txt", self.save_txt_checkbox.isChecked())))
         self.save_json_checkbox.setChecked(bool(data.get("save_json", self.save_json_checkbox.isChecked())))
 
@@ -1905,10 +1967,11 @@ class MainWindow(QMainWindow):
                 return None
 
         save_srt = self.save_srt_checkbox.isChecked()
+        save_lrc = self.save_lrc_checkbox.isChecked()
         save_txt = self.save_txt_checkbox.isChecked()
         save_json = self.save_json_checkbox.isChecked()
 
-        if not (save_srt or save_txt or save_json):
+        if not (save_srt or save_lrc or save_txt or save_json):
             QMessageBox.warning(self, "未选择输出格式", "请至少选择一种输出格式")
             return None
 
@@ -1933,6 +1996,7 @@ class MainWindow(QMainWindow):
             thread_count=self.thread_spin.value(),
             subtitle_translation_thread_count=self.subtitle_translation_thread_spin.value(),
             save_srt=save_srt,
+            save_lrc=save_lrc,
             save_txt=save_txt,
             save_json=save_json,
             ffmpeg_path=ffmpeg_path,

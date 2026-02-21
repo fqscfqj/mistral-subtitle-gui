@@ -29,6 +29,7 @@
 - 输出文件名支持语言后缀（示例：`abc.zh.srt`）
 - 输出格式：
   - `.srt`
+  - `.lrc`（纯音频任务可选）
   - `.txt`
   - `.json`
 - 支持批量任务停止/取消（包括队列中的任务）
@@ -70,6 +71,7 @@ python mistral_subtitle_gui.py
 输出文件命名规则为：源文件名（不含扩展名）+ 语言代码后缀：
 
 - `input_video.zh.srt`
+- `input_audio.zh.lrc`（纯音频任务且启用 `.lrc` 输出时）
 - `input_video.zh.txt`
 - `input_video.zh.json`
 
