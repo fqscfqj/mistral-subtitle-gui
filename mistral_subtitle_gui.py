@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -88,10 +89,12 @@ class TaskCancelled(Exception):
 class TranscriptionSettings:
     api_key: str
     model: str
+    language_mode: str
     language: str
     timestamp_granularity: str
     diarize: bool
     context_bias: str
+    output_mode: str
     output_dir: Path
     save_srt: bool
     save_txt: bool
@@ -274,6 +277,36 @@ def parse_context_bias(raw_text: str) -> str:
             break
     return ",".join(tokens)
 
+
+def normalize_language_code(value: str) -> str:
+    cleaned = value.strip().lower().replace("_", "-")
+    if not cleaned:
+        return ""
+    primary = cleaned.split("-", 1)[0].strip()
+    token = "".join(ch for ch in primary if ch.isalnum())
+    return token
+
+
+def detect_language_code(payload: Dict[str, Any]) -> str:
+    candidates: List[str] = []
+    for key in ("language", "detected_language", "lang"):
+        val = payload.get(key)
+        if isinstance(val, str):
+            candidates.append(val)
+
+    meta = payload.get("metadata")
+    if isinstance(meta, dict):
+        for key in ("language", "detected_language", "lang"):
+            val = meta.get(key)
+            if isinstance(val, str):
+                candidates.append(val)
+
+    for cand in candidates:
+        code = normalize_language_code(cand)
+        if code:
+            return code
+    return "und"
+
 def transcribe_task(
     task_id: str,
     source_path: Path,
@@ -318,7 +351,7 @@ def transcribe_task(
         kwargs: Dict[str, Any] = {"model": settings.model}
         if settings.timestamp_granularity != "none":
             kwargs["timestamp_granularities"] = [settings.timestamp_granularity]
-        elif settings.language:
+        elif settings.language_mode == "manual" and settings.language:
             kwargs["language"] = settings.language
         if settings.diarize:
             kwargs["diarize"] = True
@@ -339,8 +372,21 @@ def transcribe_task(
         if cancel_event.is_set():
             raise TaskCancelled("写入前已取消")
 
-        settings.output_dir.mkdir(parents=True, exist_ok=True)
-        out_base = settings.output_dir / source_path.stem
+        if settings.output_mode == "source":
+            target_dir = source_path.parent
+        else:
+            target_dir = settings.output_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+        lang_code = (
+            normalize_language_code(settings.language)
+            if settings.language_mode == "manual"
+            else detect_language_code(payload)
+        )
+        if not lang_code:
+            lang_code = "und"
+
+        out_base = target_dir / f"{source_path.stem}.{lang_code}"
         outputs: Dict[str, str] = {}
 
         if settings.save_srt:
@@ -404,87 +450,16 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(14, 14, 14, 14)
         root_layout.setSpacing(10)
 
-        settings_group = QGroupBox("Mistral API 设置")
-        settings_layout = QGridLayout(settings_group)
+        tabs = QTabWidget()
 
-        self.api_key_input = QLineEdit(os.environ.get("MISTRAL_API_KEY", ""))
-        self.api_key_input.setPlaceholderText("请输入 MISTRAL_API_KEY")
-        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.show_key_checkbox = QCheckBox("显示")
-        self.show_key_checkbox.toggled.connect(self.on_toggle_show_key)
-
-        api_key_row = QWidget()
-        api_key_row_layout = QHBoxLayout(api_key_row)
-        api_key_row_layout.setContentsMargins(0, 0, 0, 0)
-        api_key_row_layout.addWidget(self.api_key_input)
-        api_key_row_layout.addWidget(self.show_key_checkbox)
-
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
-        self.model_combo.addItems(["voxtral-mini-latest", "voxtral-small-latest"])
-
-        self.language_input = QLineEdit("")
-        self.language_input.setPlaceholderText("可选，例如 en / zh")
-
-        self.timestamp_combo = QComboBox()
-        self.timestamp_combo.addItems(["none", "segment", "word"])
-
-        self.diarize_checkbox = QCheckBox("启用说话人分离")
-
-        self.thread_spin = QSpinBox()
-        self.thread_spin.setRange(1, 16)
-        self.thread_spin.setValue(3)
-
-        self.output_dir_input = QLineEdit(str(Path.cwd() / "subtitles"))
-        self.output_btn = QPushButton("浏览")
-        self.output_btn.clicked.connect(self.on_choose_output_dir)
-
-        output_row = QWidget()
-        output_row_layout = QHBoxLayout(output_row)
-        output_row_layout.setContentsMargins(0, 0, 0, 0)
-        output_row_layout.addWidget(self.output_dir_input)
-        output_row_layout.addWidget(self.output_btn)
-
-        self.context_bias_input = QPlainTextEdit()
-        self.context_bias_input.setPlaceholderText("可选词条，使用逗号或换行分隔")
-        self.context_bias_input.setFixedHeight(64)
-
-        self.save_srt_checkbox = QCheckBox("保存 .srt")
-        self.save_srt_checkbox.setChecked(True)
-        self.save_txt_checkbox = QCheckBox("保存 .txt")
-        self.save_txt_checkbox.setChecked(True)
-        self.save_json_checkbox = QCheckBox("保存 .json")
-
-        format_row = QWidget()
-        format_row_layout = QHBoxLayout(format_row)
-        format_row_layout.setContentsMargins(0, 0, 0, 0)
-        format_row_layout.addWidget(self.save_srt_checkbox)
-        format_row_layout.addWidget(self.save_txt_checkbox)
-        format_row_layout.addWidget(self.save_json_checkbox)
-        format_row_layout.addStretch(1)
-
-        settings_layout.addWidget(QLabel("API 密钥"), 0, 0)
-        settings_layout.addWidget(api_key_row, 0, 1)
-        settings_layout.addWidget(QLabel("模型"), 1, 0)
-        settings_layout.addWidget(self.model_combo, 1, 1)
-        settings_layout.addWidget(QLabel("语言"), 2, 0)
-        settings_layout.addWidget(self.language_input, 2, 1)
-        settings_layout.addWidget(QLabel("时间戳"), 3, 0)
-        settings_layout.addWidget(self.timestamp_combo, 3, 1)
-        settings_layout.addWidget(QLabel("最大线程数"), 4, 0)
-        settings_layout.addWidget(self.thread_spin, 4, 1)
-        settings_layout.addWidget(QLabel("输出目录"), 5, 0)
-        settings_layout.addWidget(output_row, 5, 1)
-        settings_layout.addWidget(QLabel("上下文偏置"), 6, 0)
-        settings_layout.addWidget(self.context_bias_input, 6, 1)
-        settings_layout.addWidget(self.diarize_checkbox, 7, 0, 1, 2)
-        settings_layout.addWidget(format_row, 8, 0, 1, 2)
-
-        root_layout.addWidget(settings_group)
+        task_page = QWidget()
+        task_layout = QVBoxLayout(task_page)
+        task_layout.setContentsMargins(0, 0, 0, 0)
+        task_layout.setSpacing(10)
 
         self.drop_frame = DropFrame()
         self.drop_frame.files_dropped.connect(self.on_drop_paths)
-        root_layout.addWidget(self.drop_frame)
+        task_layout.addWidget(self.drop_frame)
 
         import_row = QWidget()
         import_layout = QHBoxLayout(import_row)
@@ -520,8 +495,7 @@ class MainWindow(QMainWindow):
         import_layout.addWidget(self.start_btn)
         import_layout.addWidget(self.stop_btn)
         import_layout.addWidget(self.open_output_btn)
-
-        root_layout.addWidget(import_row)
+        task_layout.addWidget(import_row)
 
         self.task_table = QTableWidget(0, 5)
         self.task_table.setHorizontalHeaderLabels(["来源文件", "状态", "进度", "输出文件", "消息"])
@@ -534,23 +508,124 @@ class MainWindow(QMainWindow):
         self.task_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.task_table.setAlternatingRowColors(True)
         self.task_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        root_layout.addWidget(self.task_table)
+        task_layout.addWidget(self.task_table)
 
         self.total_progress = QProgressBar()
         self.total_progress.setRange(0, 100)
         self.total_progress.setValue(0)
-
         self.summary_label = QLabel("当前无运行任务")
-
-        root_layout.addWidget(self.total_progress)
-        root_layout.addWidget(self.summary_label)
+        task_layout.addWidget(self.total_progress)
+        task_layout.addWidget(self.summary_label)
 
         self.log_text = QPlainTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setFixedHeight(140)
-        root_layout.addWidget(self.log_text)
+        task_layout.addWidget(self.log_text)
+
+        settings_page = QWidget()
+        settings_page_layout = QVBoxLayout(settings_page)
+        settings_page_layout.setContentsMargins(0, 0, 0, 0)
+        settings_page_layout.setSpacing(10)
+
+        settings_group = QGroupBox("Mistral API 与输出设置")
+        settings_layout = QGridLayout(settings_group)
+
+        self.api_key_input = QLineEdit(os.environ.get("MISTRAL_API_KEY", ""))
+        self.api_key_input.setPlaceholderText("请输入 MISTRAL_API_KEY")
+        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.show_key_checkbox = QCheckBox("显示")
+        self.show_key_checkbox.toggled.connect(self.on_toggle_show_key)
+
+        api_key_row = QWidget()
+        api_key_row_layout = QHBoxLayout(api_key_row)
+        api_key_row_layout.setContentsMargins(0, 0, 0, 0)
+        api_key_row_layout.addWidget(self.api_key_input)
+        api_key_row_layout.addWidget(self.show_key_checkbox)
+
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.addItems(["voxtral-mini-latest", "voxtral-small-latest"])
+
+        self.language_mode_combo = QComboBox()
+        self.language_mode_combo.addItems(["自动识别", "指定语言"])
+        self.language_mode_combo.currentIndexChanged.connect(self.on_language_mode_changed)
+
+        self.language_input = QLineEdit("zh")
+        self.language_input.setPlaceholderText("语言代码，例如 zh / en")
+
+        self.timestamp_combo = QComboBox()
+        self.timestamp_combo.addItems(["none", "segment", "word"])
+
+        self.diarize_checkbox = QCheckBox("启用说话人分离")
+
+        self.thread_spin = QSpinBox()
+        self.thread_spin.setRange(1, 16)
+        self.thread_spin.setValue(3)
+
+        self.output_mode_combo = QComboBox()
+        self.output_mode_combo.addItems(["输出到原文件目录", "输出到指定目录"])
+        self.output_mode_combo.currentIndexChanged.connect(self.on_output_mode_changed)
+
+        self.output_dir_input = QLineEdit(str(Path.cwd() / "subtitles"))
+        self.output_btn = QPushButton("浏览")
+        self.output_btn.clicked.connect(self.on_choose_output_dir)
+
+        output_row = QWidget()
+        output_row_layout = QHBoxLayout(output_row)
+        output_row_layout.setContentsMargins(0, 0, 0, 0)
+        output_row_layout.addWidget(self.output_dir_input)
+        output_row_layout.addWidget(self.output_btn)
+
+        self.context_bias_input = QPlainTextEdit()
+        self.context_bias_input.setPlaceholderText("可选词条，使用逗号或换行分隔")
+        self.context_bias_input.setFixedHeight(64)
+
+        self.save_srt_checkbox = QCheckBox("保存 .srt")
+        self.save_srt_checkbox.setChecked(True)
+        self.save_txt_checkbox = QCheckBox("保存 .txt")
+        self.save_txt_checkbox.setChecked(True)
+        self.save_json_checkbox = QCheckBox("保存 .json")
+
+        format_row = QWidget()
+        format_row_layout = QHBoxLayout(format_row)
+        format_row_layout.setContentsMargins(0, 0, 0, 0)
+        format_row_layout.addWidget(self.save_srt_checkbox)
+        format_row_layout.addWidget(self.save_txt_checkbox)
+        format_row_layout.addWidget(self.save_json_checkbox)
+        format_row_layout.addStretch(1)
+
+        settings_layout.addWidget(QLabel("API 密钥"), 0, 0)
+        settings_layout.addWidget(api_key_row, 0, 1)
+        settings_layout.addWidget(QLabel("模型"), 1, 0)
+        settings_layout.addWidget(self.model_combo, 1, 1)
+        settings_layout.addWidget(QLabel("语言模式"), 2, 0)
+        settings_layout.addWidget(self.language_mode_combo, 2, 1)
+        settings_layout.addWidget(QLabel("指定语言"), 3, 0)
+        settings_layout.addWidget(self.language_input, 3, 1)
+        settings_layout.addWidget(QLabel("时间戳粒度"), 4, 0)
+        settings_layout.addWidget(self.timestamp_combo, 4, 1)
+        settings_layout.addWidget(QLabel("最大线程数"), 5, 0)
+        settings_layout.addWidget(self.thread_spin, 5, 1)
+        settings_layout.addWidget(QLabel("输出目录模式"), 6, 0)
+        settings_layout.addWidget(self.output_mode_combo, 6, 1)
+        settings_layout.addWidget(QLabel("指定输出目录"), 7, 0)
+        settings_layout.addWidget(output_row, 7, 1)
+        settings_layout.addWidget(QLabel("上下文偏置"), 8, 0)
+        settings_layout.addWidget(self.context_bias_input, 8, 1)
+        settings_layout.addWidget(self.diarize_checkbox, 9, 0, 1, 2)
+        settings_layout.addWidget(format_row, 10, 0, 1, 2)
+
+        settings_page_layout.addWidget(settings_group)
+        settings_page_layout.addStretch(1)
+
+        tabs.addTab(task_page, "任务")
+        tabs.addTab(settings_page, "设置")
+
+        root_layout.addWidget(tabs)
 
         self.setCentralWidget(root)
+        self.on_language_mode_changed()
+        self.on_output_mode_changed()
         self.apply_style()
 
     def apply_style(self) -> None:
@@ -639,6 +714,19 @@ class MainWindow(QMainWindow):
     def on_toggle_show_key(self, checked: bool) -> None:
         mode = QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
         self.api_key_input.setEchoMode(mode)
+
+    def on_language_mode_changed(self) -> None:
+        manual = self.language_mode_combo.currentIndex() == 1
+        self.language_input.setEnabled(manual)
+        if manual:
+            self.language_input.setPlaceholderText("语言代码，例如 zh / en")
+        else:
+            self.language_input.setPlaceholderText("自动识别时无需填写")
+
+    def on_output_mode_changed(self) -> None:
+        custom = self.output_mode_combo.currentIndex() == 1
+        self.output_dir_input.setEnabled(custom)
+        self.output_btn.setEnabled(custom)
 
     def on_choose_output_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "选择输出目录", self.output_dir_input.text())
@@ -783,15 +871,23 @@ class MainWindow(QMainWindow):
             return None
 
         model = self.model_combo.currentText().strip() or "voxtral-mini-latest"
-        language = self.language_input.text().strip()
+        language_mode = "manual" if self.language_mode_combo.currentIndex() == 1 else "auto"
+        language = normalize_language_code(self.language_input.text().strip())
         timestamp = self.timestamp_combo.currentText().strip() or "none"
         diarize = self.diarize_checkbox.isChecked()
         context_bias = parse_context_bias(self.context_bias_input.toPlainText())
 
-        if timestamp != "none" and language:
+        if language_mode == "manual" and not language:
+            QMessageBox.warning(self, "语言设置无效", "已选择指定语言，请填写有效语言代码，例如 zh / en")
+            return None
+
+        if timestamp != "none" and language_mode == "manual":
             self.log("启用时间戳粒度后，language 参数将被忽略")
 
+        output_mode = "custom" if self.output_mode_combo.currentIndex() == 1 else "source"
         output_dir = Path(self.output_dir_input.text().strip() or str(Path.cwd() / "subtitles"))
+        if output_mode == "custom":
+            output_dir.mkdir(parents=True, exist_ok=True)
 
         save_srt = self.save_srt_checkbox.isChecked()
         save_txt = self.save_txt_checkbox.isChecked()
@@ -805,10 +901,12 @@ class MainWindow(QMainWindow):
         return TranscriptionSettings(
             api_key=api_key,
             model=model,
+            language_mode=language_mode,
             language=language,
             timestamp_granularity=timestamp,
             diarize=diarize,
             context_bias=context_bias,
+            output_mode=output_mode,
             output_dir=output_dir,
             save_srt=save_srt,
             save_txt=save_txt,
@@ -845,7 +943,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        settings.output_dir.mkdir(parents=True, exist_ok=True)
+        if settings.output_mode == "custom":
+            settings.output_dir.mkdir(parents=True, exist_ok=True)
 
         max_workers = self.thread_spin.value()
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
@@ -895,8 +994,21 @@ class MainWindow(QMainWindow):
         self.log(f"已请求停止，取消了 {canceled_count} 个排队任务")
 
     def on_open_output_dir(self) -> None:
-        folder = Path(self.output_dir_input.text().strip() or str(Path.cwd() / "subtitles"))
-        folder.mkdir(parents=True, exist_ok=True)
+        if self.output_mode_combo.currentIndex() == 0:
+            selected_rows = self.task_table.selectionModel().selectedRows()
+            if selected_rows:
+                row = selected_rows[0].row()
+                item = self.task_table.item(row, 0)
+                folder = Path(item.text()).parent if item else Path.cwd()
+            elif self.tasks:
+                first_task = next(iter(self.tasks.values()))
+                folder = first_task.source_path.parent
+            else:
+                folder = Path.cwd()
+        else:
+            folder = Path(self.output_dir_input.text().strip() or str(Path.cwd() / "subtitles"))
+            folder.mkdir(parents=True, exist_ok=True)
+
         if sys.platform.startswith("win"):
             os.startfile(str(folder))  # type: ignore[attr-defined]
         elif sys.platform == "darwin":

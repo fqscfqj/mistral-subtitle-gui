@@ -6,14 +6,19 @@ A PySide6 desktop app for generating subtitles from video/audio files using Mist
 
 - Drag & drop files/folders
 - Add single files or recursively scan a folder
+- Independent pages: `任务` and `设置`
 - Multi-threaded task execution (configurable thread count)
 - Per-task status and progress + global progress
 - Configurable Mistral options:
   - `model`
-  - `language` (only used when timestamp granularity is `none`)
+  - language mode: auto-detect or manual language code
   - `timestamp_granularities` (`none`, `segment`, `word`)
   - `diarize`
   - `context_bias`
+- Output directory mode:
+  - use source file directory
+  - use custom directory
+- Language-suffixed output naming (example: `abc.zh.srt`)
 - Output formats:
   - `.srt`
   - `.txt`
@@ -53,8 +58,8 @@ python mistral_subtitle_gui.py
 
 ## Output
 
-All outputs are written to the selected output folder using source filename stem:
+Outputs are named with source stem + language code suffix:
 
-- `input_video.srt`
-- `input_video.txt`
-- `input_video.json`
+- `input_video.zh.srt`
+- `input_video.zh.txt`
+- `input_video.zh.json`
