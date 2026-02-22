@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -97,6 +97,12 @@ class TaskCancelled(Exception):
     pass
 
 
+def resource_path(relative_path: str) -> Path:
+    if hasattr(sys, "_MEIPASS"):
+        return Path(getattr(sys, "_MEIPASS")) / relative_path
+    return Path(__file__).resolve().parent / relative_path
+
+
 @dataclass
 class TranscriptionSettings:
     api_key: str
@@ -170,6 +176,9 @@ class DropFrame(QFrame):
 
 
 def find_ffmpeg() -> str:
+    bundled = resource_path("ffmpeg.exe")
+    if bundled.exists():
+        return str(bundled)
     custom = os.environ.get("FFMPEG_BINARY", "").strip()
     if custom and Path(custom).exists():
         return custom
@@ -2276,7 +2285,10 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app_icon = QIcon(str(resource_path("assets/logo.ico")))
+    app.setWindowIcon(app_icon)
     window = MainWindow()
+    window.setWindowIcon(app_icon)
     window.show()
     return app.exec()
 
