@@ -23,6 +23,7 @@
   - OpenAI 兼容 `base_url` + `api_key`（支持第三方服务商）
   - 目标语言代码
   - 双语 SRT 输出（原文 + 译文）
+  - 可选额外保留原文 SRT（`xxx.orig.srt`）
 - 输出目录模式：
   - 使用源文件所在目录
   - 使用自定义目录
@@ -78,5 +79,6 @@ python mistral_subtitle_gui.py
 启用翻译后：
 
 - 原文转写：`input_video.en.srt`（示例）
-- 转录后翻译字幕会基于转写文件追加目标语言后缀：`input_video.en.srt` -> `input_video.en.zh.srt`
-- 导入已有字幕翻译时，会额外生成目标语言文件（例如：`input_video.srt` -> `input_video.zh.srt`）；若文件名已带目标语言后缀，则会使用 `.translated` 避免覆盖（例如：`input_video.zh.srt` -> `input_video.zh.translated.srt`）
+- 转录后翻译与导入字幕翻译均统一输出：`xxx.<目标语言>.<扩展名>`（例如：`input_video.zh.srt`、`input_audio.zh.lrc`、`input_video.zh.txt`、`input_video.zh.json`）
+- 若开启“翻译后额外输出原文字幕”，会额外生成：`xxx.orig.srt`
+- 若目标文件已存在（或路径与源字幕冲突），会自动避让命名：`name.ext` -> `name.translated.ext` -> `name.translated2.ext` ...

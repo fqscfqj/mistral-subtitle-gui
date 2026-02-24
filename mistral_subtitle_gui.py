@@ -120,6 +120,7 @@ class TranscriptionSettings:
     translation_openai_api_key: str
     translation_openai_base_url: str
     translation_bilingual_srt: bool
+    translation_keep_original_srt: bool
     allow_subtitle_import: bool
     thread_count: int
     subtitle_translation_thread_count: int
@@ -902,20 +903,8 @@ def build_bilingual_srt_text(
 def resolve_translation_base(
     target_dir: Path,
     source_stem: str,
-    source_lang_code: str,
     target_lang_code: str,
-    force_target_suffix: bool = False,
-    always_append_target_suffix: bool = False,
 ) -> Path:
-    if always_append_target_suffix:
-        return target_dir / f"{source_stem}.{target_lang_code}"
-    if force_target_suffix:
-        target_suffix = f".{target_lang_code}".casefold()
-        if source_stem.casefold().endswith(target_suffix):
-            return target_dir / f"{source_stem}.translated"
-        return target_dir / f"{source_stem}.{target_lang_code}"
-    if source_lang_code == target_lang_code:
-        return target_dir / f"{source_stem}.{target_lang_code}.translated"
     return target_dir / f"{source_stem}.{target_lang_code}"
 
 
@@ -926,10 +915,9 @@ def write_translation_outputs(
     settings: TranscriptionSettings,
     original_segments: List[Dict[str, Any]],
     translated_segments: List[Dict[str, Any]],
+    original_text: str,
     translated_text: str,
     source_path: Optional[Path] = None,
-    force_target_suffix: bool = False,
-    always_append_target_suffix: bool = False,
     write_lrc: bool = False,
 ) -> Dict[str, str]:
     outputs: Dict[str, str] = {}
@@ -937,27 +925,35 @@ def write_translation_outputs(
     trans_base = resolve_translation_base(
         target_dir=target_dir,
         source_stem=source_stem,
-        source_lang_code=source_lang_code,
         target_lang_code=target_lang_code,
-        force_target_suffix=force_target_suffix,
-        always_append_target_suffix=always_append_target_suffix,
     )
+    orig_base = target_dir / f"{source_stem}.orig"
+
+    def with_output_ext(base: Path, extension: str) -> Path:
+        return base.with_name(f"{base.name}{extension}")
+
+    def same_path(left: Path, right: Path) -> bool:
+        try:
+            left_resolved = left.resolve()
+            right_resolved = right.resolve()
+        except Exception:
+            left_resolved = left.absolute()
+            right_resolved = right.absolute()
+        return str(left_resolved).casefold() == str(right_resolved).casefold()
 
     def avoid_overwrite(path: Path) -> Path:
-        if source_path is None:
-            return path
-        try:
-            src_resolved = source_path.resolve()
-            dst_resolved = path.resolve()
-        except Exception:
-            src_resolved = source_path.absolute()
-            dst_resolved = path.absolute()
-        if str(src_resolved).casefold() == str(dst_resolved).casefold():
-            return path.with_name(f"{path.stem}.translated{path.suffix}")
-        return path
+        base_path = path
+        attempt = 0
+        while True:
+            conflict_with_source = source_path is not None and same_path(path, source_path)
+            if not conflict_with_source and not path.exists():
+                return path
+            attempt += 1
+            suffix = ".translated" if attempt == 1 else f".translated{attempt}"
+            path = base_path.with_name(f"{base_path.stem}{suffix}{base_path.suffix}")
 
     if settings.save_srt:
-        trans_srt_path = avoid_overwrite(trans_base.with_suffix(".srt"))
+        trans_srt_path = avoid_overwrite(with_output_ext(trans_base, ".srt"))
         if translated_segments:
             if settings.translation_bilingual_srt:
                 trans_srt_text = build_bilingual_srt_text(original_segments, translated_segments)
@@ -967,20 +963,25 @@ def write_translation_outputs(
             trans_srt_text = build_srt_text([], translated_text)
         trans_srt_path.write_text(trans_srt_text, encoding="utf-8")
         outputs["srt_翻译"] = str(trans_srt_path)
+        if settings.translation_keep_original_srt:
+            orig_srt_path = avoid_overwrite(with_output_ext(orig_base, ".srt"))
+            orig_srt_text = build_srt_text(original_segments, original_text)
+            orig_srt_path.write_text(orig_srt_text, encoding="utf-8")
+            outputs["srt_原文"] = str(orig_srt_path)
 
     if write_lrc:
-        trans_lrc_path = avoid_overwrite(trans_base.with_suffix(".lrc"))
+        trans_lrc_path = avoid_overwrite(with_output_ext(trans_base, ".lrc"))
         trans_lrc_text = build_lrc_text(translated_segments, translated_text)
         trans_lrc_path.write_text(trans_lrc_text, encoding="utf-8")
         outputs["lrc_翻译"] = str(trans_lrc_path)
 
     if settings.save_txt:
-        trans_txt_path = avoid_overwrite(trans_base.with_suffix(".txt"))
+        trans_txt_path = avoid_overwrite(with_output_ext(trans_base, ".txt"))
         trans_txt_path.write_text(translated_text or "", encoding="utf-8")
         outputs["txt_翻译"] = str(trans_txt_path)
 
     if settings.save_json:
-        trans_json_path = avoid_overwrite(trans_base.with_suffix(".json"))
+        trans_json_path = avoid_overwrite(with_output_ext(trans_base, ".json"))
         trans_payload = {
             "type": "translation",
             "mode": settings.translation_mode,
@@ -1082,6 +1083,7 @@ def transcribe_task(
             lang_code = "und"
 
         out_base = target_dir / f"{source_path.stem}.{lang_code}"
+        translation_source_stem = trim_language_suffix_from_stem(source_path.stem, lang_code)
         outputs: Dict[str, str] = {}
 
         if settings.save_srt:
@@ -1139,14 +1141,14 @@ def transcribe_task(
             outputs.update(
                 write_translation_outputs(
                     target_dir=target_dir,
-                    source_stem=out_base.stem,
+                    source_stem=translation_source_stem,
                     source_lang_code=lang_code,
                     settings=settings,
                     original_segments=original_segments,
                     translated_segments=translated_segments,
+                    original_text=text,
                     translated_text=translated_text,
                     source_path=source_path,
-                    always_append_target_suffix=True,
                     write_lrc=settings.save_lrc and is_audio_input,
                 )
             )
@@ -1246,9 +1248,9 @@ def translate_subtitle_task(
             settings=settings,
             original_segments=original_segments,
             translated_segments=translated_segments,
+            original_text=original_text,
             translated_text=translated_text,
             source_path=source_path,
-            force_target_suffix=True,
         )
 
         report("Completed", 100, "完成")
@@ -1457,6 +1459,8 @@ class MainWindow(QMainWindow):
 
         self.translation_bilingual_checkbox = QCheckBox("SRT 输出双语（原文 + 译文）")
         self.translation_bilingual_checkbox.setChecked(True)
+        self.translation_keep_original_checkbox = QCheckBox("翻译后额外输出原文字幕（xxx.orig.srt）")
+        self.translation_keep_original_checkbox.setChecked(False)
         self.allow_subtitle_import_checkbox = QCheckBox("允许导入字幕文件并翻译")
         self.allow_subtitle_import_checkbox.setChecked(True)
         self.subtitle_translation_thread_spin = QSpinBox()
@@ -1488,13 +1492,14 @@ class MainWindow(QMainWindow):
         translation_layout.addWidget(QLabel("翻译模型"), 2, 0)
         translation_layout.addWidget(self.translation_model_input, 2, 1)
         translation_layout.addWidget(self.translation_bilingual_checkbox, 3, 0, 1, 2)
-        translation_layout.addWidget(self.allow_subtitle_import_checkbox, 4, 0, 1, 2)
-        translation_layout.addWidget(QLabel("字幕翻译线程数"), 5, 0)
-        translation_layout.addWidget(self.subtitle_translation_thread_spin, 5, 1)
-        translation_layout.addWidget(QLabel("OpenAI 兼容 Base URL"), 6, 0)
-        translation_layout.addWidget(self.translation_openai_base_input, 6, 1)
-        translation_layout.addWidget(QLabel("OpenAI 兼容 API Key"), 7, 0)
-        translation_layout.addWidget(openai_key_row, 7, 1)
+        translation_layout.addWidget(self.translation_keep_original_checkbox, 4, 0, 1, 2)
+        translation_layout.addWidget(self.allow_subtitle_import_checkbox, 5, 0, 1, 2)
+        translation_layout.addWidget(QLabel("字幕翻译线程数"), 6, 0)
+        translation_layout.addWidget(self.subtitle_translation_thread_spin, 6, 1)
+        translation_layout.addWidget(QLabel("OpenAI 兼容 Base URL"), 7, 0)
+        translation_layout.addWidget(self.translation_openai_base_input, 7, 1)
+        translation_layout.addWidget(QLabel("OpenAI 兼容 API Key"), 8, 0)
+        translation_layout.addWidget(openai_key_row, 8, 1)
 
         settings_layout.addWidget(QLabel("API 密钥"), 0, 0)
         settings_layout.addWidget(api_key_row, 0, 1)
@@ -1649,6 +1654,7 @@ class MainWindow(QMainWindow):
             "translation_target": self.translation_target_input.text().strip(),
             "translation_model": self.translation_model_input.text().strip(),
             "translation_bilingual": self.translation_bilingual_checkbox.isChecked(),
+            "translation_keep_original_srt": self.translation_keep_original_checkbox.isChecked(),
             "allow_subtitle_import": self.allow_subtitle_import_checkbox.isChecked(),
             "subtitle_translation_thread_count": self.subtitle_translation_thread_spin.value(),
             "translation_openai_base": self.translation_openai_base_input.text().strip(),
@@ -1703,6 +1709,14 @@ class MainWindow(QMainWindow):
         )
         self.translation_bilingual_checkbox.setChecked(
             bool(data.get("translation_bilingual", self.translation_bilingual_checkbox.isChecked()))
+        )
+        self.translation_keep_original_checkbox.setChecked(
+            bool(
+                data.get(
+                    "translation_keep_original_srt",
+                    self.translation_keep_original_checkbox.isChecked(),
+                )
+            )
         )
         self.allow_subtitle_import_checkbox.setChecked(
             bool(data.get("allow_subtitle_import", self.allow_subtitle_import_checkbox.isChecked()))
@@ -1761,6 +1775,7 @@ class MainWindow(QMainWindow):
         self.translation_target_input.setEnabled(enable_translation)
         self.translation_model_input.setEnabled(enable_translation)
         self.translation_bilingual_checkbox.setEnabled(enable_translation)
+        self.translation_keep_original_checkbox.setEnabled(enable_translation)
         self.allow_subtitle_import_checkbox.setEnabled(enable_translation)
         self.subtitle_translation_thread_spin.setEnabled(enable_translation)
         self.translation_openai_base_input.setEnabled(use_openai_compatible)
@@ -1957,6 +1972,7 @@ class MainWindow(QMainWindow):
         translation_openai_base_url = self.translation_openai_base_input.text().strip() or "https://api.openai.com/v1"
         translation_openai_api_key = self.translation_openai_key_input.text().strip()
         translation_bilingual_srt = self.translation_bilingual_checkbox.isChecked()
+        translation_keep_original_srt = self.translation_keep_original_checkbox.isChecked()
 
         if translation_mode != "none":
             if not translation_target_language:
@@ -2007,6 +2023,7 @@ class MainWindow(QMainWindow):
             translation_openai_api_key=translation_openai_api_key,
             translation_openai_base_url=translation_openai_base_url,
             translation_bilingual_srt=translation_bilingual_srt,
+            translation_keep_original_srt=translation_keep_original_srt,
             allow_subtitle_import=allow_subtitle_import,
             thread_count=self.thread_spin.value(),
             subtitle_translation_thread_count=self.subtitle_translation_thread_spin.value(),
