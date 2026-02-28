@@ -1001,8 +1001,50 @@ def write_translation_outputs(
     return outputs
 
 
+def _derive_ffprobe_path(ffmpeg_path: str) -> str:
+    """Derive ffprobe path from ffmpeg path (same directory, or fall back to PATH)."""
+    p = Path(ffmpeg_path)
+    suffix = p.suffix
+    candidate = p.parent / f"ffprobe{suffix}"
+    if candidate.exists():
+        return str(candidate)
+    found = shutil.which("ffprobe")
+    return found or ""
+
+
 def get_audio_duration_seconds(ffmpeg_path: str, audio_path: Path) -> float:
-    """Return audio/video duration in seconds by parsing ffmpeg stderr output."""
+    """Return audio/video duration in seconds.
+
+    Tries ffprobe JSON output first for reliability, then falls back to
+    parsing the Duration: line from ``ffmpeg -i`` stderr.
+    Raises RuntimeError if duration cannot be determined.
+    """
+    ffprobe_path = _derive_ffprobe_path(ffmpeg_path)
+    if ffprobe_path:
+        result = subprocess.run(
+            [
+                ffprobe_path,
+                "-v", "quiet",
+                "-show_entries", "format=duration",
+                "-of", "csv=p=0",
+                str(audio_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        raw = result.stdout.strip()
+        try:
+            val = float(raw)
+            if val > 0:
+                return val
+        except ValueError:
+            pass
+
+    # Fallback: parse Duration: from ffmpeg -i stderr
     result = subprocess.run(
         [ffmpeg_path, "-i", str(audio_path)],
         stdout=subprocess.PIPE,
@@ -1014,15 +1056,16 @@ def get_audio_duration_seconds(ffmpeg_path: str, audio_path: Path) -> float:
     )
     match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
     if not match:
-        return 0.0
+        raise RuntimeError(f"无法获取音频时长，请确认文件格式受 ffmpeg 支持: {audio_path.name}")
     return int(match.group(1)) * 3600.0 + int(match.group(2)) * 60.0 + float(match.group(3))
 
 
 def split_audio_into_chunks(
-    ffmpeg_path: str, audio_path: Path, chunk_duration: float, temp_dir: Path
+    ffmpeg_path: str, audio_path: Path, chunk_duration: float, temp_dir: Path,
+    total_seconds: Optional[float] = None,
 ) -> List[Path]:
     """Split audio into chunks of at most chunk_duration seconds. Returns list of chunk paths."""
-    total = get_audio_duration_seconds(ffmpeg_path, audio_path)
+    total = total_seconds if total_seconds is not None else get_audio_duration_seconds(ffmpeg_path, audio_path)
     if total <= 0 or total <= chunk_duration:
         return [audio_path]
     suffix = audio_path.suffix or ".wav"
@@ -1034,8 +1077,8 @@ def split_audio_into_chunks(
         cmd = [
             ffmpeg_path,
             "-y",
-            "-ss", str(offset),
             "-i", str(audio_path),
+            "-ss", str(offset),
             "-t", str(chunk_duration),
             "-c", "copy",
             str(chunk_path),
@@ -1144,7 +1187,8 @@ def transcribe_task(
             if duration > MAX_CHUNK_DURATION_SECONDS:
                 temp_chunk_dir = Path(tempfile.mkdtemp(prefix="mistral_chunks_"))
                 chunk_paths = split_audio_into_chunks(
-                    settings.ffmpeg_path, audio_path, MAX_CHUNK_DURATION_SECONDS, temp_chunk_dir
+                    settings.ffmpeg_path, audio_path, MAX_CHUNK_DURATION_SECONDS, temp_chunk_dir,
+                    total_seconds=duration,
                 )
                 report("Transcribing", 45, f"音频时长 {duration/3600:.1f}h 超过限制，将分 {len(chunk_paths)} 段转写")
 
