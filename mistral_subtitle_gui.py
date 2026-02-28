@@ -80,6 +80,7 @@ SUBTITLE_EXTENSIONS = {
 MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 SUPPORTED_EXTENSIONS = MEDIA_EXTENSIONS | SUBTITLE_EXTENSIONS
 SETTINGS_FILE = ".mistral_subtitle_gui_settings.json"
+MAX_CHUNK_DURATION_SECONDS = 3 * 3600  # Voxtral API single-task limit: 3 hours
 STATUS_LABELS = {
     "Queued": "排队中",
     "Preparing": "准备中",
@@ -999,6 +1000,90 @@ def write_translation_outputs(
 
     return outputs
 
+
+def get_audio_duration_seconds(ffmpeg_path: str, audio_path: Path) -> float:
+    """Return audio/video duration in seconds by parsing ffmpeg stderr output."""
+    result = subprocess.run(
+        [ffmpeg_path, "-i", str(audio_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
+    if not match:
+        return 0.0
+    return int(match.group(1)) * 3600.0 + int(match.group(2)) * 60.0 + float(match.group(3))
+
+
+def split_audio_into_chunks(
+    ffmpeg_path: str, audio_path: Path, chunk_duration: float, temp_dir: Path
+) -> List[Path]:
+    """Split audio into chunks of at most chunk_duration seconds. Returns list of chunk paths."""
+    total = get_audio_duration_seconds(ffmpeg_path, audio_path)
+    if total <= 0 or total <= chunk_duration:
+        return [audio_path]
+    suffix = audio_path.suffix or ".wav"
+    chunks: List[Path] = []
+    offset = 0.0
+    idx = 0
+    while offset < total:
+        chunk_path = temp_dir / f"chunk_{idx:04d}{suffix}"
+        cmd = [
+            ffmpeg_path,
+            "-y",
+            "-ss", str(offset),
+            "-i", str(audio_path),
+            "-t", str(chunk_duration),
+            "-c", "copy",
+            str(chunk_path),
+        ]
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg 音频分割失败: {result.stderr.strip()[-400:]}")
+        chunks.append(chunk_path)
+        offset += chunk_duration
+        idx += 1
+    return chunks
+
+
+def merge_chunked_transcriptions(
+    chunk_results: List[tuple],
+    chunk_duration: float,
+) -> tuple:
+    """Merge transcription results from multiple audio chunks, adjusting timestamps."""
+    if len(chunk_results) == 1:
+        payload, segs, text = chunk_results[0]
+        return payload, segs, text
+    all_segments: List[Dict[str, Any]] = []
+    all_texts: List[str] = []
+    first_payload = chunk_results[0][0]
+    for chunk_idx, (_, segs, text) in enumerate(chunk_results):
+        offset = chunk_idx * chunk_duration
+        for seg in segs:
+            adjusted = dict(seg)
+            adjusted["start"] = float(seg["start"]) + offset
+            adjusted["end"] = float(seg["end"]) + offset
+            all_segments.append(adjusted)
+        if text.strip():
+            all_texts.append(text.strip())
+    merged_text = "\n".join(all_texts)
+    merged_payload = dict(first_payload)
+    merged_payload["segments"] = all_segments
+    merged_payload["text"] = merged_text
+    return merged_payload, all_segments, merged_text
+
+
 def transcribe_task(
     task_id: str,
     source_path: Path,
@@ -1007,6 +1092,7 @@ def transcribe_task(
     cancel_event: threading.Event,
 ) -> None:
     temp_audio: Optional[Path] = None
+    temp_chunk_dir: Optional[Path] = None
 
     def report(status: str, progress: int, message: str) -> None:
         signals.progress.emit(task_id, status, progress, message)
@@ -1040,7 +1126,6 @@ def transcribe_task(
         if Mistral is None:
             raise RuntimeError("缺少依赖：mistralai")
 
-        report("Transcribing", 60, "正在调用 Mistral API")
         client = Mistral(api_key=settings.api_key)
 
         kwargs: Dict[str, Any] = {"model": settings.model}
@@ -1053,17 +1138,36 @@ def transcribe_task(
         if settings.context_bias:
             kwargs["context_bias"] = settings.context_bias
 
-        with open(audio_path, "rb") as f:
-            response = client.audio.transcriptions.complete(
-                file={"content": f, "file_name": audio_path.name},
-                **kwargs,
-            )
+        chunk_paths: List[Path] = [audio_path]
+        if settings.ffmpeg_path:
+            duration = get_audio_duration_seconds(settings.ffmpeg_path, audio_path)
+            if duration > MAX_CHUNK_DURATION_SECONDS:
+                temp_chunk_dir = Path(tempfile.mkdtemp(prefix="mistral_chunks_"))
+                chunk_paths = split_audio_into_chunks(
+                    settings.ffmpeg_path, audio_path, MAX_CHUNK_DURATION_SECONDS, temp_chunk_dir
+                )
+                report("Transcribing", 45, f"音频时长 {duration/3600:.1f}h 超过限制，将分 {len(chunk_paths)} 段转写")
+
+        chunk_results: List[tuple] = []
+        for i, chunk_path in enumerate(chunk_paths):
+            if cancel_event.is_set():
+                raise TaskCancelled("转写前已取消")
+            if len(chunk_paths) > 1:
+                report("Transcribing", 60 + int(25 * i / len(chunk_paths)), f"正在转写第 {i + 1}/{len(chunk_paths)} 段")
+            else:
+                report("Transcribing", 60, "正在调用 Mistral API")
+            with open(chunk_path, "rb") as f:
+                response = client.audio.transcriptions.complete(
+                    file={"content": f, "file_name": chunk_path.name},
+                    **kwargs,
+                )
+            chunk_payload = normalize_response(response)
+            chunk_results.append((chunk_payload, extract_segments(chunk_payload), extract_text(chunk_payload)))
+
+        payload, segments, text = merge_chunked_transcriptions(chunk_results, MAX_CHUNK_DURATION_SECONDS)
+        original_segments = [dict(seg) for seg in segments]
 
         report("Writing", 85, "正在生成转写文件")
-        payload = normalize_response(response)
-        text = extract_text(payload)
-        segments = extract_segments(payload)
-        original_segments = [dict(seg) for seg in segments]
 
         if cancel_event.is_set():
             raise TaskCancelled("写入前已取消")
@@ -1164,6 +1268,11 @@ def transcribe_task(
         if temp_audio and temp_audio.exists():
             try:
                 temp_audio.unlink(missing_ok=True)
+            except Exception:
+                pass
+        if temp_chunk_dir and temp_chunk_dir.exists():
+            try:
+                shutil.rmtree(temp_chunk_dir, ignore_errors=True)
             except Exception:
                 pass
 
