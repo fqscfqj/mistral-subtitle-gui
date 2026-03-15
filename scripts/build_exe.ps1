@@ -1,8 +1,43 @@
+param(
+    [switch]$NoPause,
+    [switch]$NoOpenDist
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 chcp 65001 | Out-Null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+
+function Get-ParentProcessName {
+    try {
+        $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $PID"
+        if (-not $processInfo -or -not $processInfo.ParentProcessId) {
+            return $null
+        }
+        return (Get-Process -Id $processInfo.ParentProcessId -ErrorAction Stop).ProcessName
+    }
+    catch {
+        return $null
+    }
+}
+
+function Wait-ForExitIfNeeded {
+    param(
+        [string]$Message = "按 Enter 键关闭此窗口"
+    )
+
+    if ($NoPause -or -not $script:IsExplorerLaunch) {
+        return
+    }
+
+    Write-Host ""
+    Read-Host $Message | Out-Null
+}
+
+$script:IsExplorerLaunch = (Get-ParentProcessName) -eq "explorer"
+$buildSucceeded = $false
+$exitCode = 0
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pythonExe = Join-Path $repoRoot ".venv\\Scripts\\python.exe"
@@ -84,11 +119,12 @@ try {
         throw "构建完成但未找到目标产物：$distExePath"
     }
 
+    $buildSucceeded = $true
     Write-Host ("[4/4] Build complete: {0}" -f $distExePath)
 }
 catch {
     Write-Error $_
-    exit 1
+    $exitCode = 1
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {
@@ -97,4 +133,17 @@ finally {
     if (Test-Path -LiteralPath $buildAssetsDir) {
         Remove-Item -LiteralPath $buildAssetsDir -Recurse -Force
     }
+
+    if ($buildSucceeded -and $script:IsExplorerLaunch -and -not $NoOpenDist) {
+        Start-Process explorer.exe "/select,`"$distExePath`""
+    }
+
+    if ($buildSucceeded) {
+        Wait-ForExitIfNeeded -Message "构建完成，按 Enter 键关闭此窗口"
+    }
+    else {
+        Wait-ForExitIfNeeded -Message "构建失败，按 Enter 键关闭此窗口"
+    }
 }
+
+exit $exitCode

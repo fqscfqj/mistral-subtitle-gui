@@ -99,12 +99,20 @@ python main.py
 ./scripts/build_exe.ps1
 ```
 
+也可以在资源管理器中直接双击 `scripts/build_exe.ps1`。脚本在双击启动时会在构建完成后自动打开产物位置，并保留窗口直到手动关闭。
+
 构建脚本会：
 
 1. 在虚拟环境中安装项目依赖与 `PyInstaller`
 2. 下载并临时准备 `ffmpeg.exe` 与 `ffprobe.exe`
 3. 使用 `mistral_subtitle_gui.spec` 打包 `main.py`
 4. 输出 `dist/MistralSubtitleStudio.exe`
+
+如果你是在终端中执行且不想要结束时的暂停或自动打开产物目录，可以使用：
+
+```powershell
+./scripts/build_exe.ps1 -NoPause -NoOpenDist
+```
 
 ## 测试
 
