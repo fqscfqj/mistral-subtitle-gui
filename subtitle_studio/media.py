@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -28,6 +29,17 @@ class AudioChunk:
     path: Path
     start_offset: float
     end_offset: float
+
+
+def _ffmpeg_subprocess_kwargs() -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = 0
+        kwargs["startupinfo"] = startupinfo
+    return kwargs
 
 
 def discover_supported_files(folder: Path) -> list[Path]:
@@ -61,6 +73,7 @@ def extract_audio_with_ffmpeg(ffmpeg_path: str, input_file: Path, output_file: P
         encoding="utf-8",
         errors="replace",
         check=False,
+        **_ffmpeg_subprocess_kwargs(),
     )
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg 执行失败: {result.stderr.strip()[-400:]}")
@@ -121,6 +134,7 @@ def get_audio_duration_seconds(ffmpeg_path: str, audio_path: Path) -> float:
             encoding="utf-8",
             errors="replace",
             check=False,
+            **_ffmpeg_subprocess_kwargs(),
         )
         raw = result.stdout.strip()
         try:
@@ -138,6 +152,7 @@ def get_audio_duration_seconds(ffmpeg_path: str, audio_path: Path) -> float:
         encoding="utf-8",
         errors="replace",
         check=False,
+        **_ffmpeg_subprocess_kwargs(),
     )
     match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", result.stderr)
     if not match:
@@ -183,6 +198,7 @@ def split_audio_into_chunks(
             encoding="utf-8",
             errors="replace",
             check=False,
+            **_ffmpeg_subprocess_kwargs(),
         )
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg 音频分割失败: {result.stderr.strip()[-400:]}")
