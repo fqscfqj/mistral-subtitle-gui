@@ -16,7 +16,11 @@ from .media import (
     split_audio_with_vad,
 )
 from .models import AppSettings, TaskCancelled, TranscriptionRequest, TranscriptionResult, TranslationRequest
-from .providers.transcription import MistralTranscriptionProvider, WhisperOpenAICompatibleProvider
+from .providers.transcription import (
+    MistralTranscriptionProvider,
+    WhisperOpenAICompatibleProvider,
+    summarize_empty_transcription_response,
+)
 from .providers.translation import build_translation_provider
 from .utils import (
     detect_language_code,
@@ -273,6 +277,20 @@ class TaskRunner:
         payload["text"] = "\n".join(merged_text_parts).strip()
         if detected_language:
             payload["language"] = detected_language
+        if (
+            isinstance(provider, WhisperOpenAICompatibleProvider)
+            and not merged_segments
+            and not payload["text"]
+        ):
+            detail = summarize_empty_transcription_response(
+                payload if first_payload is not None else {},
+                str(payload.get("text", "")),
+            )
+            raise RuntimeError(
+                "Whisper 兼容接口返回了空转写结果。"
+                "这通常表示上游模型或服务虽然返回了 HTTP 200，但实际转写失败。"
+                f"{detail}"
+            )
         return TranscriptionResult(
             text=payload["text"],
             segments=merged_segments,

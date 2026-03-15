@@ -120,13 +120,6 @@ class WhisperOpenAICompatibleProvider(TranscriptionProvider):
         segments = extract_segments(payload)
         text = extract_text(payload)
         language = detect_language_code(payload)
-        if not segments and not text.strip():
-            detail = self._summarize_empty_response(payload, response.text)
-            raise RuntimeError(
-                "Whisper 兼容接口返回了空转写结果。"
-                "这通常表示上游模型或服务虽然返回了 HTTP 200，但实际转写失败。"
-                f"{detail}"
-            )
         return TranscriptionResult(
             text=text,
             segments=segments,
@@ -158,12 +151,14 @@ class WhisperOpenAICompatibleProvider(TranscriptionProvider):
             ".ogg": "audio/ogg",
         }.get(suffix, "application/octet-stream")
 
-    def _summarize_empty_response(self, payload: Dict[str, Any], raw_text: str) -> str:
-        if payload:
-            keys = ", ".join(sorted(str(key) for key in payload.keys())[:8])
-            if keys:
-                return f" 响应字段: {keys}。"
-        snippet = raw_text.strip().replace("\r", " ").replace("\n", " ")
-        if snippet:
-            return f" 原始响应片段: {snippet[:240]}"
-        return " 请检查服务端日志，以及所选模型是否真的支持 OpenAI 兼容的 audio/transcriptions 输出。"
+
+
+def summarize_empty_transcription_response(payload: Dict[str, Any], raw_text: str) -> str:
+    if payload:
+        keys = ", ".join(sorted(str(key) for key in payload.keys())[:8])
+        if keys:
+            return f" 响应字段: {keys}。"
+    snippet = raw_text.strip().replace("\r", " ").replace("\n", " ")
+    if snippet:
+        return f" 原始响应片段: {snippet[:240]}"
+    return " 请检查服务端日志，以及所选模型是否真的支持 OpenAI 兼容的 audio/transcriptions 输出。"
