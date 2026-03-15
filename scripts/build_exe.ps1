@@ -1,9 +1,13 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+chcp 65001 | Out-Null
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pythonExe = Join-Path $repoRoot ".venv\\Scripts\\python.exe"
 $specPath = Join-Path $repoRoot "mistral_subtitle_gui.spec"
+$requirementsPath = Join-Path $repoRoot "requirements.txt"
 $distExePath = Join-Path $repoRoot "dist\\MistralSubtitleStudio.exe"
 
 $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1.1-essentials_build.zip"
@@ -12,6 +16,7 @@ $zipPath = Join-Path $tempRoot "ffmpeg.zip"
 $extractDir = Join-Path $tempRoot "ffmpeg_extract"
 $buildAssetsDir = Join-Path $repoRoot "build_assets"
 $bundledFfmpegPath = Join-Path $buildAssetsDir "ffmpeg.exe"
+$bundledFfprobePath = Join-Path $buildAssetsDir "ffprobe.exe"
 
 if (-not (Test-Path -LiteralPath $pythonExe)) {
     throw "未找到虚拟环境 Python：$pythonExe"
@@ -19,13 +24,16 @@ if (-not (Test-Path -LiteralPath $pythonExe)) {
 if (-not (Test-Path -LiteralPath $specPath)) {
     throw "未找到 PyInstaller spec 文件：$specPath"
 }
+if (-not (Test-Path -LiteralPath $requirementsPath)) {
+    throw "未找到依赖文件：$requirementsPath"
+}
 
 try {
-    Write-Host "[1/4] 安装 PyInstaller..."
+    Write-Host "[1/4] 安装构建依赖..."
     & $pythonExe -m pip install --upgrade pip
-    & $pythonExe -m pip install pyinstaller
+    & $pythonExe -m pip install -r $requirementsPath pyinstaller
 
-    Write-Host "[2/4] 下载并准备 ffmpeg..."
+    Write-Host "[2/4] 下载并准备 ffmpeg / ffprobe..."
     if (Test-Path -LiteralPath $tempRoot) {
         Remove-Item -LiteralPath $tempRoot -Recurse -Force
     }
@@ -50,7 +58,18 @@ try {
         throw "下载包中未找到 ffmpeg.exe，可能是下载源结构已变化：$ffmpegUrl"
     }
 
+    $ffprobeCandidate = Get-ChildItem -Path $extractDir -Recurse -File -Filter "ffprobe.exe" |
+        Where-Object { $_.FullName -match "\\bin\\ffprobe\.exe$" } |
+        Select-Object -First 1
+    if (-not $ffprobeCandidate) {
+        $ffprobeCandidate = Get-ChildItem -Path $extractDir -Recurse -File -Filter "ffprobe.exe" | Select-Object -First 1
+    }
+    if (-not $ffprobeCandidate) {
+        throw "下载包中未找到 ffprobe.exe，可能是下载源结构已变化：$ffmpegUrl"
+    }
+
     Copy-Item -LiteralPath $ffmpegCandidate.FullName -Destination $bundledFfmpegPath -Force
+    Copy-Item -LiteralPath $ffprobeCandidate.FullName -Destination $bundledFfprobePath -Force
 
     Write-Host "[3/4] 运行 PyInstaller 构建..."
     Push-Location $repoRoot

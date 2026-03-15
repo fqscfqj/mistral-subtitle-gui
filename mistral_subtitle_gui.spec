@@ -9,6 +9,7 @@ a = Analysis(
         ("assets/logo.ico", "assets"),
         ("assets/silero_vad.onnx", "assets"),
         ("build_assets/ffmpeg.exe", "."),
+        ("build_assets/ffprobe.exe", "."),
     ],
     hiddenimports=[
         "onnxruntime",

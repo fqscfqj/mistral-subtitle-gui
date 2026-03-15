@@ -101,8 +101,8 @@ python main.py
 
 构建脚本会：
 
-1. 在虚拟环境中安装 `PyInstaller`
-2. 下载并临时准备 `ffmpeg.exe`
+1. 在虚拟环境中安装项目依赖与 `PyInstaller`
+2. 下载并临时准备 `ffmpeg.exe` 与 `ffprobe.exe`
 3. 使用 `mistral_subtitle_gui.spec` 打包 `main.py`
 4. 输出 `dist/MistralSubtitleStudio.exe`
 
