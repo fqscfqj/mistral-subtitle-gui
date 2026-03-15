@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List
@@ -96,7 +97,7 @@ def extract_text(payload: Dict[str, Any]) -> str:
     for key in ("text", "transcript", "output_text"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
+            return sanitize_transcribed_text(value)
     return ""
 
 
@@ -114,10 +115,13 @@ def extract_segments(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         end = item.get("end")
         text = item.get("text")
         if isinstance(start, (int, float)) and isinstance(end, (int, float)):
+            cleaned_text = sanitize_transcribed_text(str(text or ""))
+            if not cleaned_text:
+                continue
             segment: Dict[str, Any] = {
                 "start": float(start),
                 "end": float(end),
-                "text": str(text or "").strip(),
+                "text": cleaned_text,
             }
             if "speaker" in item:
                 segment["speaker"] = item.get("speaker")
@@ -126,6 +130,22 @@ def extract_segments(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     if segments:
         _normalize_segment_timestamps(segments, raw_pairs)
     return segments
+
+
+def sanitize_transcribed_text(value: str) -> str:
+    text = re.sub(r"\s+", " ", value.strip())
+    if not text:
+        return ""
+    if any(_is_meaningful_char(ch) for ch in text):
+        return text
+    return ""
+
+
+def _is_meaningful_char(ch: str) -> bool:
+    cat = unicodedata.category(ch)
+    if cat[0] in {"L", "N"}:
+        return True
+    return False
 
 
 def _normalize_segment_timestamps(

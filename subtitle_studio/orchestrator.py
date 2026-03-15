@@ -27,6 +27,7 @@ from .utils import (
     extract_subtitle_source,
     infer_language_code_from_filename,
     normalize_language_code,
+    sanitize_transcribed_text,
     trim_language_suffix_from_stem,
 )
 from .writers import write_transcription_outputs, write_translation_outputs
@@ -255,20 +256,27 @@ class TaskRunner:
                 first_payload = dict(result.raw_payload)
             if result.language and not detected_language:
                 detected_language = result.language
-            if result.text.strip():
-                merged_text_parts.append(result.text.strip())
+
+            cleaned_text = sanitize_transcribed_text(result.text)
+            if cleaned_text:
+                merged_text_parts.append(cleaned_text)
+
             if result.segments:
                 for segment in result.segments:
+                    segment_text = sanitize_transcribed_text(str(segment.get("text", "")))
+                    if not segment_text:
+                        continue
                     adjusted = dict(segment)
                     adjusted["start"] = float(segment["start"]) + chunk.start_offset
                     adjusted["end"] = float(segment["end"]) + chunk.start_offset
+                    adjusted["text"] = segment_text
                     merged_segments.append(adjusted)
-            elif result.text.strip():
+            elif cleaned_text:
                 merged_segments.append(
                     {
                         "start": chunk.start_offset,
                         "end": max(chunk.end_offset, chunk.start_offset),
-                        "text": result.text.strip(),
+                        "text": cleaned_text,
                     }
                 )
 
