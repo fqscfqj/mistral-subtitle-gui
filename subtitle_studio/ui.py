@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QWheelEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -89,6 +89,11 @@ class DropFrame(QFrame):
         if paths:
             self.files_dropped.emit(paths)
         event.acceptProposedAction()
+
+
+class NoWheelComboBox(QComboBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        event.ignore()
 
 
 def run_task_worker(
@@ -259,7 +264,7 @@ class MainWindow(QMainWindow):
         group = QGroupBox("转写设置")
         layout = QGridLayout(group)
 
-        self.transcription_provider_combo = QComboBox()
+        self.transcription_provider_combo = NoWheelComboBox()
         self.transcription_provider_combo.addItem("Mistral", "mistral")
         self.transcription_provider_combo.addItem("Whisper(OpenAI 兼容)", "whisper_openai_compatible")
         self.transcription_provider_combo.currentIndexChanged.connect(self.on_transcription_provider_changed)
@@ -278,7 +283,7 @@ class MainWindow(QMainWindow):
         mistral_key_layout.addWidget(self.mistral_api_key_input)
         mistral_key_layout.addWidget(self.show_mistral_key_checkbox)
 
-        self.mistral_model_combo = QComboBox()
+        self.mistral_model_combo = NoWheelComboBox()
         self.mistral_model_combo.setEditable(True)
         self.mistral_model_combo.addItems(["voxtral-mini-latest", "voxtral-small-latest"])
 
@@ -298,11 +303,11 @@ class MainWindow(QMainWindow):
         whisper_key_layout.addWidget(self.whisper_api_key_input)
         whisper_key_layout.addWidget(self.show_whisper_key_checkbox)
 
-        self.language_mode_combo = QComboBox()
+        self.language_mode_combo = NoWheelComboBox()
         self.language_mode_combo.addItems(["自动识别", "指定语言"])
         self.language_mode_combo.currentIndexChanged.connect(self.on_language_mode_changed)
         self.language_input = QLineEdit("zh")
-        self.timestamp_combo = QComboBox()
+        self.timestamp_combo = NoWheelComboBox()
         self.timestamp_combo.addItems(["none", "segment", "word"])
         self.timestamp_combo.setCurrentText("segment")
         self.diarize_checkbox = QCheckBox("启用说话人分离（仅 Mistral）")
@@ -342,7 +347,7 @@ class MainWindow(QMainWindow):
         group = QGroupBox("翻译设置")
         layout = QGridLayout(group)
 
-        self.translation_mode_combo = QComboBox()
+        self.translation_mode_combo = NoWheelComboBox()
         self.translation_mode_combo.addItem("不翻译", "none")
         self.translation_mode_combo.addItem("Mistral API 翻译", "mistral")
         self.translation_mode_combo.addItem("OpenAI 兼容 API 翻译", "openai")
@@ -394,7 +399,7 @@ class MainWindow(QMainWindow):
         group = QGroupBox("输出设置")
         layout = QGridLayout(group)
 
-        self.output_mode_combo = QComboBox()
+        self.output_mode_combo = NoWheelComboBox()
         self.output_mode_combo.addItem("输出到原文件目录", "source")
         self.output_mode_combo.addItem("输出到指定目录", "custom")
         self.output_mode_combo.currentIndexChanged.connect(self.on_output_mode_changed)
