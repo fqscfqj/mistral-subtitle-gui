@@ -96,6 +96,16 @@ class NoWheelComboBox(QComboBox):
         event.ignore()
 
 
+class NoWheelSpinBox(QSpinBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        event.ignore()
+
+
+class NoWheelDoubleSpinBox(QDoubleSpinBox):
+    def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802
+        event.ignore()
+
+
 def run_task_worker(
     task_id: str,
     source_path: Path,
@@ -311,7 +321,7 @@ class MainWindow(QMainWindow):
         self.timestamp_combo.addItems(["none", "segment", "word"])
         self.timestamp_combo.setCurrentText("segment")
         self.diarize_checkbox = QCheckBox("启用说话人分离（仅 Mistral）")
-        self.thread_spin = QSpinBox()
+        self.thread_spin = NoWheelSpinBox()
         self.thread_spin.setRange(1, 16)
         self.thread_spin.setValue(3)
         self.context_bias_input = QPlainTextEdit()
@@ -360,7 +370,7 @@ class MainWindow(QMainWindow):
         self.translation_keep_original_checkbox = QCheckBox("翻译后额外输出原文字幕（xxx.orig.srt）")
         self.allow_subtitle_import_checkbox = QCheckBox("允许导入字幕文件并翻译")
         self.allow_subtitle_import_checkbox.setChecked(True)
-        self.subtitle_translation_thread_spin = QSpinBox()
+        self.subtitle_translation_thread_spin = NoWheelSpinBox()
         self.subtitle_translation_thread_spin.setRange(1, 16)
         self.subtitle_translation_thread_spin.setValue(3)
         self.translation_openai_base_input = QLineEdit("https://api.openai.com/v1")
@@ -456,31 +466,31 @@ class MainWindow(QMainWindow):
         ffmpeg_layout.addWidget(self.ffmpeg_browse_btn)
         ffmpeg_layout.addWidget(self.ffmpeg_auto_btn)
 
-        self.vad_min_speech_spin = QSpinBox()
+        self.vad_min_speech_spin = NoWheelSpinBox()
         self.vad_min_speech_spin.setRange(1, 60_000)
         self.vad_min_speech_spin.setSingleStep(50)
         self.vad_min_speech_spin.setSuffix(" ms")
         self.vad_min_speech_spin.setValue(DEFAULT_VAD_MIN_SPEECH_MS)
 
-        self.vad_min_silence_spin = QSpinBox()
+        self.vad_min_silence_spin = NoWheelSpinBox()
         self.vad_min_silence_spin.setRange(1, 60_000)
         self.vad_min_silence_spin.setSingleStep(50)
         self.vad_min_silence_spin.setSuffix(" ms")
         self.vad_min_silence_spin.setValue(DEFAULT_VAD_MIN_SILENCE_MS)
 
-        self.vad_speech_pad_spin = QSpinBox()
+        self.vad_speech_pad_spin = NoWheelSpinBox()
         self.vad_speech_pad_spin.setRange(0, 60_000)
         self.vad_speech_pad_spin.setSingleStep(50)
         self.vad_speech_pad_spin.setSuffix(" ms")
         self.vad_speech_pad_spin.setValue(DEFAULT_VAD_SPEECH_PAD_MS)
 
-        self.vad_max_segment_spin = QSpinBox()
+        self.vad_max_segment_spin = NoWheelSpinBox()
         self.vad_max_segment_spin.setRange(1, 24 * 3600)
         self.vad_max_segment_spin.setSingleStep(30)
         self.vad_max_segment_spin.setSuffix(" s")
         self.vad_max_segment_spin.setValue(DEFAULT_VAD_MAX_SEGMENT_SECONDS)
 
-        self.vad_threshold_spin = QDoubleSpinBox()
+        self.vad_threshold_spin = NoWheelDoubleSpinBox()
         self.vad_threshold_spin.setRange(0.0, 1.0)
         self.vad_threshold_spin.setDecimals(2)
         self.vad_threshold_spin.setSingleStep(0.05)
