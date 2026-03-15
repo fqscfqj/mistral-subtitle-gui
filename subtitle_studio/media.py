@@ -8,7 +8,7 @@ import tempfile
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -31,8 +31,8 @@ class AudioChunk:
     end_offset: float
 
 
-def _ffmpeg_subprocess_kwargs() -> dict[str, object]:
-    kwargs: dict[str, object] = {}
+def _ffmpeg_subprocess_kwargs() -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
     if os.name == "nt":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         startupinfo = subprocess.STARTUPINFO()
