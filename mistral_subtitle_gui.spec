@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ["mistral_subtitle_gui.py"],
+    ["main.py"],
     pathex=[],
     binaries=[],
     datas=[
