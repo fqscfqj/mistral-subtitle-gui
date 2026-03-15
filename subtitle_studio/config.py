@@ -191,10 +191,11 @@ def deserialize_settings(data: Dict[str, Any]) -> AppSettings:
         16,
     )
 
+    translation_mode_index = _safe_int(data.get("translation_mode_index"), -1)
     settings.translation.mode = _safe_str(
         data.get(
             "translation_mode",
-            {0: "none", 1: "mistral", 2: "openai"}.get(data.get("translation_mode_index"), settings.translation.mode),
+            {0: "none", 1: "mistral", 2: "openai"}.get(translation_mode_index, settings.translation.mode),
         ),
         settings.translation.mode,
     )
