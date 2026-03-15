@@ -86,6 +86,33 @@ def _safe_str(value: Any, fallback: str) -> str:
     return str(value)
 
 
+def _safe_float(value: Any, fallback: float, minimum: float | None = None, maximum: float | None = None) -> float:
+    try:
+        result = float(value)
+    except Exception:
+        result = fallback
+    if minimum is not None:
+        result = max(minimum, result)
+    if maximum is not None:
+        result = min(maximum, result)
+    return result
+
+
+def resolve_ffmpeg_path(preferred: str) -> str:
+    candidate = preferred.strip()
+    if candidate:
+        resolved = shutil.which(candidate)
+        return resolved or candidate
+    return find_ffmpeg()
+
+
+def has_ffmpeg(path_or_command: str) -> bool:
+    candidate = path_or_command.strip()
+    if not candidate:
+        return False
+    return Path(candidate).exists() or shutil.which(candidate) is not None
+
+
 def serialize_settings(settings: AppSettings) -> Dict[str, Any]:
     return {
         "transcription_provider": settings.transcription.provider,
@@ -115,7 +142,13 @@ def serialize_settings(settings: AppSettings) -> Dict[str, Any]:
         "save_lrc": settings.output.save_lrc,
         "save_txt": settings.output.save_txt,
         "save_json": settings.output.save_json,
+        "ffmpeg_path": settings.output.ffmpeg_path,
         "silero_vad_enabled": settings.vad.enabled,
+        "vad_min_speech_ms": settings.vad.min_speech_ms,
+        "vad_min_silence_ms": settings.vad.min_silence_ms,
+        "vad_speech_pad_ms": settings.vad.speech_pad_ms,
+        "vad_max_segment_seconds": settings.vad.max_segment_seconds,
+        "vad_threshold": settings.vad.threshold,
     }
 
 
@@ -206,9 +239,39 @@ def deserialize_settings(data: Dict[str, Any]) -> AppSettings:
     settings.output.save_lrc = _safe_bool(data.get("save_lrc"), settings.output.save_lrc)
     settings.output.save_txt = _safe_bool(data.get("save_txt"), settings.output.save_txt)
     settings.output.save_json = _safe_bool(data.get("save_json"), settings.output.save_json)
-    settings.output.ffmpeg_path = find_ffmpeg()
+    settings.output.ffmpeg_path = resolve_ffmpeg_path(_safe_str(data.get("ffmpeg_path"), settings.output.ffmpeg_path))
 
     settings.vad.enabled = _safe_bool(data.get("silero_vad_enabled"), settings.vad.enabled)
+    settings.vad.min_speech_ms = _safe_int(
+        data.get("vad_min_speech_ms"),
+        settings.vad.min_speech_ms,
+        1,
+        60_000,
+    )
+    settings.vad.min_silence_ms = _safe_int(
+        data.get("vad_min_silence_ms"),
+        settings.vad.min_silence_ms,
+        1,
+        60_000,
+    )
+    settings.vad.speech_pad_ms = _safe_int(
+        data.get("vad_speech_pad_ms"),
+        settings.vad.speech_pad_ms,
+        0,
+        60_000,
+    )
+    settings.vad.max_segment_seconds = _safe_int(
+        data.get("vad_max_segment_seconds"),
+        settings.vad.max_segment_seconds,
+        1,
+        24 * 3600,
+    )
+    settings.vad.threshold = _safe_float(
+        data.get("vad_threshold"),
+        settings.vad.threshold,
+        0.0,
+        1.0,
+    )
     return settings
 
 

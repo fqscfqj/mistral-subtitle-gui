@@ -31,15 +31,36 @@ class SettingsCompatibilityTests(unittest.TestCase):
         self.assertTrue(settings.vad.enabled)
 
     def test_serialize_roundtrip_contains_new_fields(self) -> None:
-        settings = deserialize_settings({"transcription_provider": "whisper_openai_compatible"})
+        settings = deserialize_settings(
+            {
+                "transcription_provider": "whisper_openai_compatible",
+                "ffmpeg_path": "C:/tools/ffmpeg.exe",
+                "vad_min_speech_ms": 320,
+                "vad_min_silence_ms": 520,
+                "vad_speech_pad_ms": 180,
+                "vad_max_segment_seconds": 120,
+                "vad_threshold": 0.65,
+            }
+        )
         payload = serialize_settings(settings)
         self.assertIn("transcription_provider", payload)
         self.assertIn("whisper_base_url", payload)
         self.assertIn("whisper_api_key", payload)
         self.assertIn("whisper_model", payload)
+        self.assertIn("ffmpeg_path", payload)
         self.assertIn("silero_vad_enabled", payload)
+        self.assertIn("vad_min_speech_ms", payload)
+        self.assertIn("vad_min_silence_ms", payload)
+        self.assertIn("vad_speech_pad_ms", payload)
+        self.assertIn("vad_max_segment_seconds", payload)
+        self.assertIn("vad_threshold", payload)
+        self.assertEqual(settings.output.ffmpeg_path, "C:/tools/ffmpeg.exe")
+        self.assertEqual(settings.vad.min_speech_ms, 320)
+        self.assertEqual(settings.vad.min_silence_ms, 520)
+        self.assertEqual(settings.vad.speech_pad_ms, 180)
+        self.assertEqual(settings.vad.max_segment_seconds, 120)
+        self.assertEqual(settings.vad.threshold, 0.65)
 
 
 if __name__ == "__main__":
     unittest.main()
-
