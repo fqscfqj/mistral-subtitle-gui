@@ -56,13 +56,14 @@ class SileroVadSession:
         if self.last_batch_size != batch_size or self.last_sample_rate != sample_rate:
             self.reset_states(batch_size)
 
-        full_chunk = np.concatenate([self.context, chunk], axis=1).astype(np.float32)
+        full_chunk = np.asarray(np.concatenate([self.context, chunk], axis=1), dtype=np.float32)
         outputs = self.session.run(
             None,
             {"input": full_chunk, "state": self.state, "sr": np.array(sample_rate, dtype=np.int64)},
         )
-        probabilities, state = outputs
-        self.state = state.astype(np.float32)
+        probabilities = np.asarray(outputs[0], dtype=np.float32)
+        state = np.asarray(outputs[1], dtype=np.float32)
+        self.state = state
         self.context = full_chunk[:, -64:]
         self.last_batch_size = batch_size
         self.last_sample_rate = sample_rate
