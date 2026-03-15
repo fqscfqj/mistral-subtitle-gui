@@ -53,7 +53,7 @@ from .constants import (
 from .media import discover_supported_files
 from .models import AppSettings, TaskCancelled, TaskState
 from .orchestrator import TaskRunner
-from .providers.transcription import Mistral
+from .providers import transcription as transcription_provider
 from .utils import new_task_id, normalize_language_code, parse_context_bias
 
 
@@ -905,7 +905,7 @@ class MainWindow(QMainWindow):
             raise RuntimeError("请至少选择一种输出格式")
         if settings.output.mode == "custom":
             settings.output.output_dir.mkdir(parents=True, exist_ok=True)
-        if settings.transcription.provider == "mistral" and Mistral is None:
+        if settings.transcription.provider == "mistral" and transcription_provider.Mistral is None:
             raise RuntimeError("缺少依赖：mistralai")
         return settings
 
