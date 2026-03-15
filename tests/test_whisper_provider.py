@@ -36,6 +36,11 @@ class FakeTimestampHttpClient:
         return HttpResponse(status_code=200, payload=self.payload, text="")
 
 
+class FakeEmptyHttpClient:
+    def post_multipart(self, url, data, files, headers):
+        return HttpResponse(status_code=200, payload={"text": "", "segments": []}, text="")
+
+
 class WhisperProviderTests(unittest.TestCase):
     def test_retry_without_timestamp_granularity(self) -> None:
         fake_client = FakeHttpClient()
@@ -141,6 +146,34 @@ class WhisperProviderTests(unittest.TestCase):
         self.assertAlmostEqual(result.segments[0]["end"], 11.232, places=3)
         self.assertAlmostEqual(result.segments[1]["start"], 11.232, places=3)
         self.assertAlmostEqual(result.segments[1]["end"], 13.232, places=3)
+
+    def test_raises_on_empty_successful_response(self) -> None:
+        provider = WhisperOpenAICompatibleProvider(
+            WhisperProviderSettings(base_url="https://example.com/v1", api_key="key", model="nemo-parakeet-tdt-0.6b"),
+            http_client=FakeEmptyHttpClient(),
+        )
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(b"RIFFfake")
+            audio_path = Path(tmp.name)
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                provider.transcribe(
+                    TranscriptionRequest(
+                        source_path=audio_path,
+                        audio_path=audio_path,
+                        language_mode="auto",
+                        language="",
+                        timestamp_granularity="segment",
+                        diarize=False,
+                        context_bias="",
+                    ),
+                    progress_cb=None,
+                    cancel_event=type("Cancel", (), {"is_set": lambda self: False})(),
+                )
+        finally:
+            audio_path.unlink(missing_ok=True)
+
+        self.assertIn("空转写结果", str(ctx.exception))
 
 
 if __name__ == "__main__":
