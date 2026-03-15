@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -210,16 +212,32 @@ class MainWindow(QMainWindow):
 
     def _build_settings_page(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
+        outer_layout = QVBoxLayout(page)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        outer_layout.addWidget(scroll)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        layout.addWidget(self._build_transcription_group())
-        layout.addWidget(self._build_translation_group())
-        layout.addWidget(self._build_output_group())
-        layout.addWidget(self._build_preprocess_group())
+        for group in (
+            self._build_transcription_group(),
+            self._build_translation_group(),
+            self._build_output_group(),
+            self._build_preprocess_group(),
+        ):
+            group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            layout.addWidget(group)
 
         actions = QWidget()
+        actions.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         actions_layout = QHBoxLayout(actions)
         actions_layout.setContentsMargins(0, 0, 0, 0)
         actions_layout.addStretch(1)
@@ -228,6 +246,7 @@ class MainWindow(QMainWindow):
         actions_layout.addWidget(self.save_settings_btn)
         layout.addWidget(actions)
         layout.addStretch(1)
+        scroll.setWidget(content)
         return page
 
     def _build_transcription_group(self) -> QGroupBox:
