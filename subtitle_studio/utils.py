@@ -106,6 +106,7 @@ def extract_segments(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         return []
 
     segments: List[Dict[str, Any]] = []
+    raw_pairs: List[tuple[float, float]] = []
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -121,7 +122,44 @@ def extract_segments(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
             if "speaker" in item:
                 segment["speaker"] = item.get("speaker")
             segments.append(segment)
+            raw_pairs.append((float(start), float(end)))
+    if segments:
+        _normalize_segment_timestamps(segments, raw_pairs)
     return segments
+
+
+def _normalize_segment_timestamps(
+    segments: List[Dict[str, Any]],
+    raw_pairs: List[tuple[float, float]],
+) -> None:
+    if not raw_pairs:
+        return
+
+    large_threshold = 10_000_000.0
+    if not any(abs(start) >= large_threshold or abs(end) >= large_threshold for start, end in raw_pairs):
+        return
+
+    def _to_seconds(value: float) -> float:
+        if abs(value) >= large_threshold:
+            return value / 1_000_000_000.0
+        return value
+
+    prev_end = 0.0
+    for seg, (raw_start, raw_end) in zip(segments, raw_pairs):
+        start = max(0.0, float(_to_seconds(raw_start)))
+        end = max(0.0, float(_to_seconds(raw_end)))
+
+        # Protect timeline continuity when upstream mixes raw units.
+        if start < prev_end:
+            start = prev_end
+        if end < start and abs(raw_end) >= large_threshold:
+            end = start + max(0.0, float(_to_seconds(raw_end)))
+        if end < start:
+            end = start
+
+        seg["start"] = start
+        seg["end"] = end
+        prev_end = end
 
 
 def build_srt_text(segments: List[Dict[str, Any]], fallback_text: str) -> str:
