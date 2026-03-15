@@ -7,9 +7,13 @@ a = Analysis(
     binaries=[],
     datas=[
         ("assets/logo.ico", "assets"),
+        ("assets/silero_vad.onnx", "assets"),
         ("build_assets/ffmpeg.exe", "."),
     ],
-    hiddenimports=[],
+    hiddenimports=[
+        "onnxruntime",
+        "onnxruntime.capi.onnxruntime_pybind11_state",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
