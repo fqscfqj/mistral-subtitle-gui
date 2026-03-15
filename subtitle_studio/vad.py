@@ -224,7 +224,10 @@ def merge_speech_segments(segments: List[VadSegment], max_segment_seconds: int) 
     merged: List[VadSegment] = []
     current = VadSegment(start=segments[0].start, end=segments[0].end)
     for segment in segments[1:]:
-        if segment.end - current.start <= max_segment_seconds:
+        current_span = segment.end - current.start
+        # Only merge overlapping/contiguous segments; keep silence boundaries intact.
+        should_merge = segment.start <= current.end and current_span <= max_segment_seconds
+        if should_merge:
             current.end = segment.end
             continue
         merged.append(current)
