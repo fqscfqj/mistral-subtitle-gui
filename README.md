@@ -1,4 +1,4 @@
-# Subtitle Studio
+# AI-Subtitle-Studio
 
 基于 `PySide6` 的桌面字幕工具，面向本地批量转写、字幕翻译和 Windows 打包分发。
 
@@ -56,7 +56,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-应用会在当前工作目录生成设置文件 `.mistral_subtitle_gui_settings.json`，用于保存界面配置和默认参数。
+应用会在当前工作目录生成设置文件 `.ai_subtitle_studio_settings.json`，用于保存界面配置和默认参数。
 
 ## 转写后端说明
 
@@ -105,8 +105,8 @@ python main.py
 
 1. 在虚拟环境中安装项目依赖与 `PyInstaller`
 2. 下载并临时准备 `ffmpeg.exe` 与 `ffprobe.exe`
-3. 使用 `mistral_subtitle_gui.spec` 打包 `main.py`
-4. 输出 `dist/MistralSubtitleStudio.exe`
+3. 使用 `ai_subtitle_studio.spec` 打包 `main.py`
+4. 输出 `dist/AI-Subtitle-Studio.exe`
 
 如果你是在终端中执行且不想要结束时的暂停或自动打开产物目录，可以使用：
 

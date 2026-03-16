@@ -41,9 +41,9 @@ $exitCode = 0
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pythonExe = Join-Path $repoRoot ".venv\\Scripts\\python.exe"
-$specPath = Join-Path $repoRoot "mistral_subtitle_gui.spec"
+$specPath = Join-Path $repoRoot "ai_subtitle_studio.spec"
 $requirementsPath = Join-Path $repoRoot "requirements.txt"
-$distExePath = Join-Path $repoRoot "dist\\MistralSubtitleStudio.exe"
+$distExePath = Join-Path $repoRoot "dist\\AI-Subtitle-Studio.exe"
 
 $ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1.1-essentials_build.zip"
 $tempRoot = Join-Path $repoRoot "build_tmp"

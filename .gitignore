@@ -28,7 +28,7 @@ var/
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
-!mistral_subtitle_gui.spec
+!ai_subtitle_studio.spec
 
 # Installer logs
 pip-log.txt
@@ -115,3 +115,4 @@ env/
 typing/
 
 .mistral_subtitle_gui_settings.json
+.ai_subtitle_studio_settings.json
