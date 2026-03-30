@@ -16,8 +16,10 @@ from ..utils import detect_language_code, extract_segments, extract_text, normal
 
 try:
     from mistralai import Mistral
-except Exception:
+    _MISTRAL_IMPORT_ERROR: Exception | None = None
+except Exception as exc:
     Mistral = None
+    _MISTRAL_IMPORT_ERROR = exc
 
 
 def normalize_audio_transcriptions_url(base_url: str) -> str:
@@ -45,7 +47,10 @@ class MistralTranscriptionProvider(TranscriptionProvider):
         if cancel_event.is_set():
             raise RuntimeError("转写前已取消")
         if Mistral is None:
-            raise RuntimeError("缺少依赖：mistralai")
+            details = ""
+            if _MISTRAL_IMPORT_ERROR is not None:
+                details = f"（导入错误：{type(_MISTRAL_IMPORT_ERROR).__name__}: {_MISTRAL_IMPORT_ERROR}）"
+            raise RuntimeError(f"缺少依赖：mistralai{details}")
         client = Mistral(api_key=self.settings.api_key)
 
         kwargs: Dict[str, Any] = {"model": self.settings.model}

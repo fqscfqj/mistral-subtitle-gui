@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_submodules
+
+mistral_hiddenimports = collect_submodules("mistralai")
 
 a = Analysis(
     ["main.py"],
@@ -14,7 +17,8 @@ a = Analysis(
     hiddenimports=[
         "onnxruntime",
         "onnxruntime.capi.onnxruntime_pybind11_state",
-    ],
+    ]
+    + mistral_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
