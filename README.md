@@ -28,7 +28,7 @@
 ```text
 main.py                    桌面应用入口
 subtitle_studio/           核心业务与界面代码
-scripts/build_exe.ps1      Windows 打包脚本
+scripts/build_exe.py       Windows 打包脚本
 tests/                     自动化测试
 assets/                    图标与本地模型资源
 ```
@@ -36,7 +36,7 @@ assets/                    图标与本地模型资源
 ## 环境要求
 
 - Python `3.10+`
-- Windows PowerShell（用于执行打包脚本）
+- Windows（用于构建 EXE）
 - 系统 `PATH` 中可用的 `ffmpeg`，或通过 `FFMPEG_BINARY` 指定
 - 至少一种可用的 API 凭证：
   - `MISTRAL_API_KEY`
@@ -96,10 +96,10 @@ python main.py
 ## 打包 EXE
 
 ```powershell
-./scripts/build_exe.ps1
+python ./scripts/build_exe.py
 ```
 
-也可以在资源管理器中直接双击 `scripts/build_exe.ps1`。脚本在双击启动时会在构建完成后自动打开产物位置，并保留窗口直到手动关闭。
+也可以在资源管理器中直接双击 `scripts/build_exe.py`。脚本在双击启动时会在构建完成后自动打开产物位置，并保留窗口直到手动关闭。
 
 构建脚本会：
 
@@ -111,7 +111,7 @@ python main.py
 如果你是在终端中执行且不想要结束时的暂停或自动打开产物目录，可以使用：
 
 ```powershell
-./scripts/build_exe.ps1 -NoPause -NoOpenDist
+python ./scripts/build_exe.py --no-pause --no-open-dist
 ```
 
 ## 测试
