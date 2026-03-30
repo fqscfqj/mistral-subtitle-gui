@@ -22,9 +22,13 @@ class SanitizeTranscribedTextTests(unittest.TestCase):
                 self.assertEqual(sanitize_transcribed_text(raw), raw)
 
     def test_filters_common_filler_utterances(self) -> None:
-        for raw in ("Mm-hmm.", "Uh-huh.", "Hmm..."):
+        for raw in ("Mm-hmm.", "Uh-huh.", "Hmm...", "Um..."):
             with self.subTest(raw=raw):
                 self.assertEqual(sanitize_transcribed_text(raw), "")
+
+    def test_normalizes_dialogue_dash(self) -> None:
+        self.assertEqual(sanitize_transcribed_text("- Yeah, it's the first time."), "Yeah, it's the first time.")
+        self.assertEqual(sanitize_transcribed_text("- Meili."), "Meili.")
 
     def test_keeps_real_short_utterances(self) -> None:
         cases = {

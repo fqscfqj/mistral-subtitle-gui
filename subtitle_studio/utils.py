@@ -11,6 +11,7 @@ from .constants import COMMON_LANGUAGE_CODES
 
 _TRAILING_PUNCTUATION_RE = re.compile(r"[\s.!?。！？…~]+$")
 _BULLET_NUMBER_FRAGMENT_RE = re.compile(r"^[\-\u2013\u2014•·*#]+\s*\d+(?:[.)、:：-]\d+)*[.)、:：-]*$")
+_DIALOGUE_PREFIX_RE = re.compile(r"^(?:[\-\u2013\u2014]+\s+)+")
 _COMMON_STAGE_DIRECTION_WORDS = {
     "applause",
     "breathing",
@@ -188,6 +189,10 @@ def sanitize_transcribed_text(value: str) -> str:
     text = re.sub(r"\s+", " ", value.strip())
     if not text:
         return ""
+    if _BULLET_NUMBER_FRAGMENT_RE.fullmatch(text):
+        return ""
+    stripped_dialogue = _strip_dialogue_prefix(text)
+    text = stripped_dialogue
     if _is_balanced_non_speech_text(text):
         return ""
     if any(_is_meaningful_char(ch) for ch in text):
@@ -224,8 +229,6 @@ def _is_stage_direction(text: str) -> bool:
 
 
 def _is_number_or_bullet_fragment(text: str) -> bool:
-    if _BULLET_NUMBER_FRAGMENT_RE.fullmatch(text):
-        return True
     stripped = re.sub(r"[\s\-\u2013\u2014•·*#]+", "", text)
     if not stripped:
         return True
@@ -241,7 +244,7 @@ def _is_filler_utterance(text: str) -> bool:
     return bool(
         re.fullmatch(r"m+h+m+", normalized)
         or re.fullmatch(r"h+m+", normalized)
-        or normalized in {"uhhuh", "uhuh"}
+        or normalized in {"uhhuh", "uhuh", "um", "umm", "uh", "uhm"}
     )
 
 
@@ -267,6 +270,10 @@ def _looks_like_stage_direction_words(text: str) -> bool:
 
 def _strip_trailing_punctuation(text: str) -> str:
     return _TRAILING_PUNCTUATION_RE.sub("", text.strip())
+
+
+def _strip_dialogue_prefix(text: str) -> str:
+    return _DIALOGUE_PREFIX_RE.sub("", text).strip()
 
 
 def _normalize_ascii_letters(text: str) -> str:
