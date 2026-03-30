@@ -9,6 +9,58 @@ from typing import Any, Dict, List
 
 from .constants import COMMON_LANGUAGE_CODES
 
+_TRAILING_PUNCTUATION_RE = re.compile(r"[\s.!?。！？…~]+$")
+_BULLET_NUMBER_FRAGMENT_RE = re.compile(r"^[\-\u2013\u2014•·*#]+\s*\d+(?:[.)、:：-]\d+)*[.)、:：-]*$")
+_COMMON_STAGE_DIRECTION_WORDS = {
+    "applause",
+    "breathing",
+    "cheering",
+    "chuckle",
+    "chuckles",
+    "clapping",
+    "cough",
+    "coughs",
+    "crying",
+    "exhale",
+    "exhales",
+    "gasp",
+    "gasps",
+    "groan",
+    "groans",
+    "grunt",
+    "grunts",
+    "humming",
+    "inhale",
+    "inhales",
+    "laugh",
+    "laughing",
+    "laughs",
+    "laughter",
+    "music",
+    "sigh",
+    "sighing",
+    "sighs",
+    "sniff",
+    "sniffs",
+    "sobbing",
+}
+_COMMON_STAGE_DIRECTION_PHRASES = {
+    "clears throat",
+    "heavy breathing",
+}
+_COMMON_STAGE_DIRECTION_WORDS_ZH = {
+    "叹气",
+    "喘息",
+    "咳嗽",
+    "哼唱",
+    "哭声",
+    "笑声",
+    "笑",
+    "掌声",
+    "欢呼",
+    "音乐",
+}
+
 
 def new_task_id() -> str:
     return uuid.uuid4().hex
@@ -136,9 +188,90 @@ def sanitize_transcribed_text(value: str) -> str:
     text = re.sub(r"\s+", " ", value.strip())
     if not text:
         return ""
+    if _is_balanced_non_speech_text(text):
+        return ""
     if any(_is_meaningful_char(ch) for ch in text):
         return text
     return ""
+
+
+def _is_balanced_non_speech_text(text: str) -> bool:
+    return (
+        _is_stage_direction(text)
+        or _is_number_or_bullet_fragment(text)
+        or _is_filler_utterance(text)
+    )
+
+
+def _is_stage_direction(text: str) -> bool:
+    core = _strip_trailing_punctuation(text)
+    if len(core) < 2:
+        return False
+    wrapper_pairs = {
+        "*": "*",
+        "[": "]",
+        "(": ")",
+        "（": "）",
+        "【": "】",
+    }
+    closing = wrapper_pairs.get(core[0])
+    if not closing or core[-1] != closing:
+        return False
+    inner = core[1:-1].strip()
+    if not inner:
+        return False
+    return _looks_like_stage_direction_words(inner)
+
+
+def _is_number_or_bullet_fragment(text: str) -> bool:
+    if _BULLET_NUMBER_FRAGMENT_RE.fullmatch(text):
+        return True
+    stripped = re.sub(r"[\s\-\u2013\u2014•·*#]+", "", text)
+    if not stripped:
+        return True
+    if any(_is_meaningful_char(ch) for ch in stripped):
+        return False
+    return True
+
+
+def _is_filler_utterance(text: str) -> bool:
+    normalized = _normalize_ascii_letters(text)
+    if not normalized:
+        return False
+    return bool(
+        re.fullmatch(r"m+h+m+", normalized)
+        or re.fullmatch(r"h+m+", normalized)
+        or normalized in {"uhhuh", "uhuh"}
+    )
+
+
+def _looks_like_stage_direction_words(text: str) -> bool:
+    folded = text.casefold()
+    if folded in _COMMON_STAGE_DIRECTION_PHRASES or folded in _COMMON_STAGE_DIRECTION_WORDS:
+        return True
+    if text in _COMMON_STAGE_DIRECTION_WORDS_ZH:
+        return True
+
+    ascii_words = re.findall(r"[a-z]+(?:'[a-z]+)?", folded)
+    if ascii_words:
+        compact = " ".join(ascii_words)
+        if compact in _COMMON_STAGE_DIRECTION_PHRASES:
+            return True
+        return all(word in _COMMON_STAGE_DIRECTION_WORDS for word in ascii_words)
+
+    cjk_words = re.findall(r"[\u4e00-\u9fff]+", text)
+    if cjk_words:
+        return all(word in _COMMON_STAGE_DIRECTION_WORDS_ZH for word in cjk_words)
+    return False
+
+
+def _strip_trailing_punctuation(text: str) -> str:
+    return _TRAILING_PUNCTUATION_RE.sub("", text.strip())
+
+
+def _normalize_ascii_letters(text: str) -> str:
+    folded = text.casefold()
+    return re.sub(r"[^a-z]+", "", folded)
 
 
 def _is_meaningful_char(ch: str) -> bool:
