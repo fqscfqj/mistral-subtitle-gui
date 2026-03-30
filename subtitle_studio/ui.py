@@ -921,7 +921,13 @@ class MainWindow(QMainWindow):
         if settings.output.mode == "custom":
             settings.output.output_dir.mkdir(parents=True, exist_ok=True)
         if settings.transcription.provider == "mistral" and transcription_provider.Mistral is None:
-            raise RuntimeError("缺少依赖：mistralai")
+            details = ""
+            if transcription_provider._MISTRAL_IMPORT_ERROR is not None:
+                details = (
+                    f"（导入错误：{type(transcription_provider._MISTRAL_IMPORT_ERROR).__name__}: "
+                    f"{transcription_provider._MISTRAL_IMPORT_ERROR}）"
+                )
+            raise RuntimeError(f"缺少依赖：mistralai{details}")
         return settings
 
     def on_start(self) -> None:

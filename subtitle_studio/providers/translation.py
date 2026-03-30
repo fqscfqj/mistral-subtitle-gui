@@ -12,9 +12,14 @@ from ..utils import extract_chat_text, is_chinese_language, normalize_response, 
 try:
     from mistralai import Mistral
     _MISTRAL_IMPORT_ERROR: Exception | None = None
-except Exception as exc:
-    Mistral = None
-    _MISTRAL_IMPORT_ERROR = exc
+except Exception:
+    try:
+        # mistralai>=2 exposes the SDK entrypoint from mistralai.client.
+        from mistralai.client import Mistral
+        _MISTRAL_IMPORT_ERROR = None
+    except Exception as exc:
+        Mistral = None
+        _MISTRAL_IMPORT_ERROR = exc
 
 
 def normalize_chat_completions_url(base_url: str) -> str:

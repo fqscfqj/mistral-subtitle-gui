@@ -17,9 +17,14 @@ from ..utils import detect_language_code, extract_segments, extract_text, normal
 try:
     from mistralai import Mistral
     _MISTRAL_IMPORT_ERROR: Exception | None = None
-except Exception as exc:
-    Mistral = None
-    _MISTRAL_IMPORT_ERROR = exc
+except Exception:
+    try:
+        # mistralai>=2 exposes the SDK entrypoint from mistralai.client.
+        from mistralai.client import Mistral
+        _MISTRAL_IMPORT_ERROR = None
+    except Exception as exc:
+        Mistral = None
+        _MISTRAL_IMPORT_ERROR = exc
 
 
 def normalize_audio_transcriptions_url(base_url: str) -> str:
