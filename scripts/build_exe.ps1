@@ -45,7 +45,7 @@ $specPath = Join-Path $repoRoot "ai_subtitle_studio.spec"
 $requirementsPath = Join-Path $repoRoot "requirements.txt"
 $distExePath = Join-Path $repoRoot "dist\\AI-Subtitle-Studio.exe"
 
-$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-7.1.1-essentials_build.zip"
+$ffmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 $tempRoot = Join-Path $repoRoot "build_tmp"
 $zipPath = Join-Path $tempRoot "ffmpeg.zip"
 $extractDir = Join-Path $tempRoot "ffmpeg_extract"
