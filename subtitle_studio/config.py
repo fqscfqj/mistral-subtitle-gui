@@ -48,7 +48,6 @@ def default_settings() -> AppSettings:
         ),
         output=OutputSettings(
             output_dir=Path.cwd() / "subtitles",
-            ffmpeg_path=find_ffmpeg(),
         ),
         vad=VadSettings(),
     )
@@ -98,19 +97,8 @@ def _safe_float(value: Any, fallback: float, minimum: float | None = None, maxim
     return result
 
 
-def resolve_ffmpeg_path(preferred: str) -> str:
-    candidate = preferred.strip()
-    if candidate:
-        resolved = shutil.which(candidate)
-        return resolved or candidate
-    return find_ffmpeg()
-
-
-def has_ffmpeg(path_or_command: str) -> bool:
-    candidate = path_or_command.strip()
-    if not candidate:
-        return False
-    return Path(candidate).exists() or shutil.which(candidate) is not None
+def has_ffmpeg() -> bool:
+    return bool(find_ffmpeg())
 
 
 def serialize_settings(settings: AppSettings) -> Dict[str, Any]:
@@ -142,7 +130,6 @@ def serialize_settings(settings: AppSettings) -> Dict[str, Any]:
         "save_lrc": settings.output.save_lrc,
         "save_txt": settings.output.save_txt,
         "save_json": settings.output.save_json,
-        "ffmpeg_path": settings.output.ffmpeg_path,
         "silero_vad_enabled": settings.vad.enabled,
         "vad_min_speech_ms": settings.vad.min_speech_ms,
         "vad_min_silence_ms": settings.vad.min_silence_ms,
@@ -240,7 +227,6 @@ def deserialize_settings(data: Dict[str, Any]) -> AppSettings:
     settings.output.save_lrc = _safe_bool(data.get("save_lrc"), settings.output.save_lrc)
     settings.output.save_txt = _safe_bool(data.get("save_txt"), settings.output.save_txt)
     settings.output.save_json = _safe_bool(data.get("save_json"), settings.output.save_json)
-    settings.output.ffmpeg_path = resolve_ffmpeg_path(_safe_str(data.get("ffmpeg_path"), settings.output.ffmpeg_path))
 
     settings.vad.enabled = _safe_bool(data.get("silero_vad_enabled"), settings.vad.enabled)
     settings.vad.min_speech_ms = _safe_int(

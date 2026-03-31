@@ -59,11 +59,11 @@ class TaskRunner:
                 raise TaskCancelled("启动前已取消")
 
             report("Preparing", 5, "检查输入文件")
-            self.settings.output.ffmpeg_path = self.settings.output.ffmpeg_path or find_ffmpeg()
+            ffmpeg_path = find_ffmpeg()
             prepared = prepare_audio_source(
                 source_path=source_path,
-                ffmpeg_path=self.settings.output.ffmpeg_path,
                 use_vad=self.settings.vad.enabled,
+                ffmpeg_path=ffmpeg_path,
             )
             cleanup.extend(prepared.cleanup_paths)
             if prepared.audio_path != source_path:
@@ -82,16 +82,13 @@ class TaskRunner:
                 cleanup.append(temp_dir)
                 chunks = split_audio_with_vad(prepared.audio_path, self.settings.vad, temp_dir)
                 report("Transcribing", 55, f"VAD 已切分为 {len(chunks)} 段")
-            elif (
-                self.settings.transcription.provider == "mistral"
-                and self.settings.output.ffmpeg_path
-            ):
-                duration = get_audio_duration_seconds(self.settings.output.ffmpeg_path, prepared.audio_path)
+            elif self.settings.transcription.provider == "mistral" and ffmpeg_path:
+                duration = get_audio_duration_seconds(ffmpeg_path, prepared.audio_path)
                 if duration > MAX_MISTRAL_CHUNK_DURATION_SECONDS:
                     temp_dir = Path(tempfile.mkdtemp(prefix="subtitle_chunks_"))
                     cleanup.append(temp_dir)
                     chunks = split_audio_into_chunks(
-                        ffmpeg_path=self.settings.output.ffmpeg_path,
+                        ffmpeg_path=ffmpeg_path,
                         audio_path=prepared.audio_path,
                         chunk_duration=MAX_MISTRAL_CHUNK_DURATION_SECONDS,
                         temp_dir=temp_dir,

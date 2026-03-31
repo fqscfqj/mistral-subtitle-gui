@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .config import has_ffmpeg, load_settings, resolve_ffmpeg_path, save_settings
+from .config import has_ffmpeg, load_settings, save_settings
 from .constants import (
     DEFAULT_VAD_MAX_SEGMENT_SECONDS,
     DEFAULT_VAD_MIN_SILENCE_MS,
@@ -453,19 +453,6 @@ class MainWindow(QMainWindow):
         self.enable_vad_checkbox.setChecked(False)
         self.enable_vad_checkbox.toggled.connect(self.on_vad_enabled_changed)
 
-        self.ffmpeg_path_input = QLineEdit()
-        self.ffmpeg_path_input.setPlaceholderText("留空则自动检测内置 ffmpeg / FFMPEG_BINARY / PATH")
-        self.ffmpeg_browse_btn = QPushButton("浏览")
-        self.ffmpeg_browse_btn.clicked.connect(self.on_choose_ffmpeg)
-        self.ffmpeg_auto_btn = QPushButton("自动检测")
-        self.ffmpeg_auto_btn.clicked.connect(self.on_auto_detect_ffmpeg)
-        ffmpeg_row = QWidget()
-        ffmpeg_layout = QHBoxLayout(ffmpeg_row)
-        ffmpeg_layout.setContentsMargins(0, 0, 0, 0)
-        ffmpeg_layout.addWidget(self.ffmpeg_path_input)
-        ffmpeg_layout.addWidget(self.ffmpeg_browse_btn)
-        ffmpeg_layout.addWidget(self.ffmpeg_auto_btn)
-
         self.vad_min_speech_spin = NoWheelSpinBox()
         self.vad_min_speech_spin.setRange(1, 60_000)
         self.vad_min_speech_spin.setSingleStep(50)
@@ -504,23 +491,21 @@ class MainWindow(QMainWindow):
             self.vad_threshold_spin,
         ]
 
-        self.ffmpeg_hint_label = QLabel("视频任务与 VAD 预切分需要 ffmpeg；可手动指定，也可留空自动检测。")
+        self.ffmpeg_hint_label = QLabel("视频任务与 VAD 预切分会自动使用软件内置 ffmpeg，无需单独设置。")
         self.ffmpeg_hint_label.setWordWrap(True)
 
-        layout.addWidget(QLabel("ffmpeg"), 0, 0)
-        layout.addWidget(ffmpeg_row, 0, 1)
-        layout.addWidget(self.ffmpeg_hint_label, 1, 0, 1, 2)
-        layout.addWidget(self.enable_vad_checkbox, 2, 0, 1, 2)
-        layout.addWidget(QLabel("最短语音"), 3, 0)
-        layout.addWidget(self.vad_min_speech_spin, 3, 1)
-        layout.addWidget(QLabel("最短静音"), 4, 0)
-        layout.addWidget(self.vad_min_silence_spin, 4, 1)
-        layout.addWidget(QLabel("语音补边"), 5, 0)
-        layout.addWidget(self.vad_speech_pad_spin, 5, 1)
-        layout.addWidget(QLabel("单段最长时长"), 6, 0)
-        layout.addWidget(self.vad_max_segment_spin, 6, 1)
-        layout.addWidget(QLabel("检测阈值"), 7, 0)
-        layout.addWidget(self.vad_threshold_spin, 7, 1)
+        layout.addWidget(self.ffmpeg_hint_label, 0, 0, 1, 2)
+        layout.addWidget(self.enable_vad_checkbox, 1, 0, 1, 2)
+        layout.addWidget(QLabel("最短语音"), 2, 0)
+        layout.addWidget(self.vad_min_speech_spin, 2, 1)
+        layout.addWidget(QLabel("最短静音"), 3, 0)
+        layout.addWidget(self.vad_min_silence_spin, 3, 1)
+        layout.addWidget(QLabel("语音补边"), 4, 0)
+        layout.addWidget(self.vad_speech_pad_spin, 4, 1)
+        layout.addWidget(QLabel("单段最长时长"), 5, 0)
+        layout.addWidget(self.vad_max_segment_spin, 5, 1)
+        layout.addWidget(QLabel("检测阈值"), 6, 0)
+        layout.addWidget(self.vad_threshold_spin, 6, 1)
         return group
 
     def apply_style(self) -> None:
@@ -639,7 +624,6 @@ class MainWindow(QMainWindow):
         self.save_lrc_checkbox.setChecked(settings.output.save_lrc)
         self.save_txt_checkbox.setChecked(settings.output.save_txt)
         self.save_json_checkbox.setChecked(settings.output.save_json)
-        self.ffmpeg_path_input.setText(settings.output.ffmpeg_path)
         self.enable_vad_checkbox.setChecked(settings.vad.enabled)
         self.vad_min_speech_spin.setValue(settings.vad.min_speech_ms)
         self.vad_min_silence_spin.setValue(settings.vad.min_silence_ms)
@@ -678,7 +662,6 @@ class MainWindow(QMainWindow):
         settings.output.save_lrc = self.save_lrc_checkbox.isChecked()
         settings.output.save_txt = self.save_txt_checkbox.isChecked()
         settings.output.save_json = self.save_json_checkbox.isChecked()
-        settings.output.ffmpeg_path = resolve_ffmpeg_path(self.ffmpeg_path_input.text())
 
         settings.vad.enabled = self.enable_vad_checkbox.isChecked()
         settings.vad.min_speech_ms = self.vad_min_speech_spin.value()
@@ -756,21 +739,6 @@ class MainWindow(QMainWindow):
         directory = QFileDialog.getExistingDirectory(self, "选择输出目录", self.output_dir_input.text())
         if directory:
             self.output_dir_input.setText(directory)
-
-    def on_choose_ffmpeg(self) -> None:
-        start_dir = self.ffmpeg_path_input.text().strip() or str(Path.cwd())
-        filters = "可执行文件 (*.exe);;所有文件 (*)" if sys.platform.startswith("win") else "所有文件 (*)"
-        file_path, _ = QFileDialog.getOpenFileName(self, "选择 ffmpeg 可执行文件", start_dir, filters)
-        if file_path:
-            self.ffmpeg_path_input.setText(file_path)
-
-    def on_auto_detect_ffmpeg(self) -> None:
-        ffmpeg_path = resolve_ffmpeg_path("")
-        if ffmpeg_path:
-            self.ffmpeg_path_input.setText(ffmpeg_path)
-            self.log(f"已检测到 ffmpeg：{ffmpeg_path}")
-            return
-        QMessageBox.warning(self, "未找到 ffmpeg", "未检测到 ffmpeg，请手动选择可执行文件路径。")
 
     def on_drop_paths(self, paths: List[str]) -> None:
         self.add_paths(paths)
@@ -951,11 +919,11 @@ class MainWindow(QMainWindow):
         has_subtitle = any(self.tasks[task_id].source_path.suffix.lower() in SUBTITLE_EXTENSIONS for task_id in run_ids)
         has_video = any(self.tasks[task_id].source_path.suffix.lower() in VIDEO_EXTENSIONS for task_id in run_ids)
         requires_ffmpeg = has_video or settings.vad.enabled
-        if requires_ffmpeg and not has_ffmpeg(settings.output.ffmpeg_path):
+        if requires_ffmpeg and not has_ffmpeg():
             QMessageBox.warning(
                 self,
                 "缺少 ffmpeg",
-                "视频任务或 VAD 预切分需要可用的 ffmpeg，请在设置页手动选择，或留空后使用自动检测。",
+                "视频任务或 VAD 预切分需要 ffmpeg。当前运行环境未检测到内置或可用的 ffmpeg，请检查打包资源是否完整。",
             )
             return
         if has_subtitle and settings.translation.mode == "none":

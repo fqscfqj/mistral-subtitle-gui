@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
-from subtitle_studio.config import deserialize_settings, serialize_settings
+from subtitle_studio.config import deserialize_settings, has_ffmpeg, serialize_settings
 
 
 class SettingsCompatibilityTests(unittest.TestCase):
@@ -47,19 +48,28 @@ class SettingsCompatibilityTests(unittest.TestCase):
         self.assertIn("whisper_base_url", payload)
         self.assertIn("whisper_api_key", payload)
         self.assertIn("whisper_model", payload)
-        self.assertIn("ffmpeg_path", payload)
         self.assertIn("silero_vad_enabled", payload)
         self.assertIn("vad_min_speech_ms", payload)
         self.assertIn("vad_min_silence_ms", payload)
         self.assertIn("vad_speech_pad_ms", payload)
         self.assertIn("vad_max_segment_seconds", payload)
         self.assertIn("vad_threshold", payload)
-        self.assertEqual(settings.output.ffmpeg_path, "C:/tools/ffmpeg.exe")
+        self.assertNotIn("ffmpeg_path", payload)
         self.assertEqual(settings.vad.min_speech_ms, 320)
         self.assertEqual(settings.vad.min_silence_ms, 520)
         self.assertEqual(settings.vad.speech_pad_ms, 180)
         self.assertEqual(settings.vad.max_segment_seconds, 120)
         self.assertEqual(settings.vad.threshold, 0.65)
+
+    @patch("subtitle_studio.config.find_ffmpeg", return_value="C:/bundle/ffmpeg.exe")
+    def test_has_ffmpeg_uses_runtime_detection(self, mock_find_ffmpeg) -> None:
+        self.assertTrue(has_ffmpeg())
+        mock_find_ffmpeg.assert_called_once_with()
+
+    @patch("subtitle_studio.config.find_ffmpeg", return_value="")
+    def test_has_ffmpeg_false_when_runtime_binary_missing(self, mock_find_ffmpeg) -> None:
+        self.assertFalse(has_ffmpeg())
+        mock_find_ffmpeg.assert_called_once_with()
 
 
 if __name__ == "__main__":

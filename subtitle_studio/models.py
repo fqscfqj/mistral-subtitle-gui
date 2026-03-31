@@ -61,7 +61,6 @@ class OutputSettings:
     save_lrc: bool = True
     save_txt: bool = True
     save_json: bool = False
-    ffmpeg_path: str = ""
 
 
 @dataclass
