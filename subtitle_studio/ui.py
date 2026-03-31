@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         self.run_progress: Dict[str, int] = {}
         self.futures: Dict[str, Any] = {}
         self.is_running = False
+        self._syncing_mistral_api_key = False
 
         self.init_ui()
         self.apply_style()
@@ -281,14 +282,15 @@ class MainWindow(QMainWindow):
 
         self.mistral_api_key_input = QLineEdit(os.environ.get("MISTRAL_API_KEY", ""))
         self.mistral_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.mistral_api_key_input.textChanged.connect(self.on_transcription_mistral_key_changed)
         self.show_mistral_key_checkbox = QCheckBox("显示")
         self.show_mistral_key_checkbox.toggled.connect(
             lambda checked: self.mistral_api_key_input.setEchoMode(
                 QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
             )
         )
-        mistral_key_row = QWidget()
-        mistral_key_layout = QHBoxLayout(mistral_key_row)
+        self.mistral_key_row = QWidget()
+        mistral_key_layout = QHBoxLayout(self.mistral_key_row)
         mistral_key_layout.setContentsMargins(0, 0, 0, 0)
         mistral_key_layout.addWidget(self.mistral_api_key_input)
         mistral_key_layout.addWidget(self.show_mistral_key_checkbox)
@@ -307,8 +309,8 @@ class MainWindow(QMainWindow):
                 QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
             )
         )
-        whisper_key_row = QWidget()
-        whisper_key_layout = QHBoxLayout(whisper_key_row)
+        self.whisper_key_row = QWidget()
+        whisper_key_layout = QHBoxLayout(self.whisper_key_row)
         whisper_key_layout.setContentsMargins(0, 0, 0, 0)
         whisper_key_layout.addWidget(self.whisper_api_key_input)
         whisper_key_layout.addWidget(self.show_whisper_key_checkbox)
@@ -328,29 +330,59 @@ class MainWindow(QMainWindow):
         self.context_bias_input.setPlaceholderText("术语提示/上下文偏置，使用逗号或换行分隔")
         self.context_bias_input.setFixedHeight(64)
 
-        layout.addWidget(QLabel("转写提供方"), 0, 0)
+        self.transcription_provider_label = QLabel("转写提供方")
+        self.mistral_api_key_label = QLabel("Mistral API Key")
+        self.mistral_model_label = QLabel("Mistral 模型")
+        self.whisper_base_url_label = QLabel("Whisper Base URL")
+        self.whisper_api_key_label = QLabel("Whisper API Key")
+        self.whisper_model_label = QLabel("Whisper 模型")
+        self.language_mode_label = QLabel("语言模式")
+        self.language_label = QLabel("指定语言")
+        self.timestamp_label = QLabel("时间戳粒度")
+        self.thread_label = QLabel("任务线程数")
+        self.context_bias_label = QLabel("术语提示")
+
+        layout.addWidget(self.transcription_provider_label, 0, 0)
         layout.addWidget(self.transcription_provider_combo, 0, 1)
-        layout.addWidget(QLabel("Mistral API Key"), 1, 0)
-        layout.addWidget(mistral_key_row, 1, 1)
-        layout.addWidget(QLabel("Mistral 模型"), 2, 0)
+        layout.addWidget(self.mistral_api_key_label, 1, 0)
+        layout.addWidget(self.mistral_key_row, 1, 1)
+        layout.addWidget(self.mistral_model_label, 2, 0)
         layout.addWidget(self.mistral_model_combo, 2, 1)
-        layout.addWidget(QLabel("Whisper Base URL"), 3, 0)
+        layout.addWidget(self.whisper_base_url_label, 3, 0)
         layout.addWidget(self.whisper_base_url_input, 3, 1)
-        layout.addWidget(QLabel("Whisper API Key"), 4, 0)
-        layout.addWidget(whisper_key_row, 4, 1)
-        layout.addWidget(QLabel("Whisper 模型"), 5, 0)
+        layout.addWidget(self.whisper_api_key_label, 4, 0)
+        layout.addWidget(self.whisper_key_row, 4, 1)
+        layout.addWidget(self.whisper_model_label, 5, 0)
         layout.addWidget(self.whisper_model_input, 5, 1)
-        layout.addWidget(QLabel("语言模式"), 6, 0)
+        layout.addWidget(self.language_mode_label, 6, 0)
         layout.addWidget(self.language_mode_combo, 6, 1)
-        layout.addWidget(QLabel("指定语言"), 7, 0)
+        layout.addWidget(self.language_label, 7, 0)
         layout.addWidget(self.language_input, 7, 1)
-        layout.addWidget(QLabel("时间戳粒度"), 8, 0)
+        layout.addWidget(self.timestamp_label, 8, 0)
         layout.addWidget(self.timestamp_combo, 8, 1)
-        layout.addWidget(QLabel("任务线程数"), 9, 0)
+        layout.addWidget(self.thread_label, 9, 0)
         layout.addWidget(self.thread_spin, 9, 1)
-        layout.addWidget(QLabel("术语提示"), 10, 0)
+        layout.addWidget(self.context_bias_label, 10, 0)
         layout.addWidget(self.context_bias_input, 10, 1)
         layout.addWidget(self.diarize_checkbox, 11, 0, 1, 2)
+
+        self.transcription_mistral_key_widgets = [
+            self.mistral_api_key_label,
+            self.mistral_key_row,
+        ]
+        self.transcription_mistral_only_widgets = [
+            self.mistral_model_label,
+            self.mistral_model_combo,
+            self.diarize_checkbox,
+        ]
+        self.transcription_whisper_widgets = [
+            self.whisper_base_url_label,
+            self.whisper_base_url_input,
+            self.whisper_api_key_label,
+            self.whisper_key_row,
+            self.whisper_model_label,
+            self.whisper_model_input,
+        ]
         return group
 
     def _build_translation_group(self) -> QGroupBox:
@@ -373,6 +405,22 @@ class MainWindow(QMainWindow):
         self.subtitle_translation_thread_spin = NoWheelSpinBox()
         self.subtitle_translation_thread_spin.setRange(1, 16)
         self.subtitle_translation_thread_spin.setValue(3)
+
+        self.translation_mistral_api_key_input = QLineEdit(os.environ.get("MISTRAL_API_KEY", ""))
+        self.translation_mistral_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.translation_mistral_api_key_input.textChanged.connect(self.on_translation_mistral_key_changed)
+        self.show_translation_mistral_key_checkbox = QCheckBox("显示")
+        self.show_translation_mistral_key_checkbox.toggled.connect(
+            lambda checked: self.translation_mistral_api_key_input.setEchoMode(
+                QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+            )
+        )
+        self.translation_mistral_key_row = QWidget()
+        translation_mistral_key_layout = QHBoxLayout(self.translation_mistral_key_row)
+        translation_mistral_key_layout.setContentsMargins(0, 0, 0, 0)
+        translation_mistral_key_layout.addWidget(self.translation_mistral_api_key_input)
+        translation_mistral_key_layout.addWidget(self.show_translation_mistral_key_checkbox)
+
         self.translation_openai_base_input = QLineEdit("https://api.openai.com/v1")
         self.translation_openai_key_input = QLineEdit(os.environ.get("OPENAI_API_KEY", ""))
         self.translation_openai_key_input.setEchoMode(QLineEdit.EchoMode.Password)
@@ -382,27 +430,59 @@ class MainWindow(QMainWindow):
                 QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
             )
         )
-        openai_key_row = QWidget()
-        openai_key_layout = QHBoxLayout(openai_key_row)
+        self.translation_openai_key_row = QWidget()
+        openai_key_layout = QHBoxLayout(self.translation_openai_key_row)
         openai_key_layout.setContentsMargins(0, 0, 0, 0)
         openai_key_layout.addWidget(self.translation_openai_key_input)
         openai_key_layout.addWidget(self.show_translation_openai_key_checkbox)
 
-        layout.addWidget(QLabel("翻译模式"), 0, 0)
+        self.translation_mode_label = QLabel("翻译模式")
+        self.translation_target_label = QLabel("目标语言")
+        self.translation_model_label = QLabel("翻译模型")
+        self.subtitle_translation_thread_label = QLabel("字幕翻译线程数")
+        self.translation_mistral_api_key_label = QLabel("Mistral API Key")
+        self.translation_openai_base_label = QLabel("OpenAI 兼容 Base URL")
+        self.translation_openai_key_label = QLabel("OpenAI 兼容 API Key")
+
+        layout.addWidget(self.translation_mode_label, 0, 0)
         layout.addWidget(self.translation_mode_combo, 0, 1)
-        layout.addWidget(QLabel("目标语言"), 1, 0)
+        layout.addWidget(self.translation_target_label, 1, 0)
         layout.addWidget(self.translation_target_input, 1, 1)
-        layout.addWidget(QLabel("翻译模型"), 2, 0)
+        layout.addWidget(self.translation_model_label, 2, 0)
         layout.addWidget(self.translation_model_input, 2, 1)
         layout.addWidget(self.translation_bilingual_checkbox, 3, 0, 1, 2)
         layout.addWidget(self.translation_keep_original_checkbox, 4, 0, 1, 2)
         layout.addWidget(self.allow_subtitle_import_checkbox, 5, 0, 1, 2)
-        layout.addWidget(QLabel("字幕翻译线程数"), 6, 0)
+        layout.addWidget(self.subtitle_translation_thread_label, 6, 0)
         layout.addWidget(self.subtitle_translation_thread_spin, 6, 1)
-        layout.addWidget(QLabel("OpenAI 兼容 Base URL"), 7, 0)
-        layout.addWidget(self.translation_openai_base_input, 7, 1)
-        layout.addWidget(QLabel("OpenAI 兼容 API Key"), 8, 0)
-        layout.addWidget(openai_key_row, 8, 1)
+        layout.addWidget(self.translation_mistral_api_key_label, 7, 0)
+        layout.addWidget(self.translation_mistral_key_row, 7, 1)
+        layout.addWidget(self.translation_openai_base_label, 8, 0)
+        layout.addWidget(self.translation_openai_base_input, 8, 1)
+        layout.addWidget(self.translation_openai_key_label, 9, 0)
+        layout.addWidget(self.translation_openai_key_row, 9, 1)
+
+        self.translation_common_widgets = [
+            self.translation_target_label,
+            self.translation_target_input,
+            self.translation_model_label,
+            self.translation_model_input,
+            self.translation_bilingual_checkbox,
+            self.translation_keep_original_checkbox,
+            self.allow_subtitle_import_checkbox,
+            self.subtitle_translation_thread_label,
+            self.subtitle_translation_thread_spin,
+        ]
+        self.translation_mistral_widgets = [
+            self.translation_mistral_api_key_label,
+            self.translation_mistral_key_row,
+        ]
+        self.translation_openai_widgets = [
+            self.translation_openai_base_label,
+            self.translation_openai_base_input,
+            self.translation_openai_key_label,
+            self.translation_openai_key_row,
+        ]
         return group
 
     def _build_output_group(self) -> QGroupBox:
@@ -508,6 +588,35 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.vad_threshold_spin, 6, 1)
         return group
 
+    def _set_widgets_visible(self, widgets: List[QWidget], visible: bool) -> None:
+        for widget in widgets:
+            widget.setVisible(visible)
+
+    def _sync_mistral_api_key_inputs(self, text: str, source: QLineEdit) -> None:
+        if self._syncing_mistral_api_key:
+            return
+        self._syncing_mistral_api_key = True
+        try:
+            targets = [self.mistral_api_key_input, self.translation_mistral_api_key_input]
+            for target in targets:
+                if target is source or target.text() == text:
+                    continue
+                target.setText(text)
+        finally:
+            self._syncing_mistral_api_key = False
+
+    def on_transcription_mistral_key_changed(self, text: str) -> None:
+        self._sync_mistral_api_key_inputs(text, self.mistral_api_key_input)
+
+    def on_translation_mistral_key_changed(self, text: str) -> None:
+        self._sync_mistral_api_key_inputs(text, self.translation_mistral_api_key_input)
+
+    def refresh_settings_visibility(self) -> None:
+        self.on_language_mode_changed()
+        self.on_translation_mode_changed()
+        self.on_output_mode_changed()
+        self.on_vad_enabled_changed()
+
     def apply_style(self) -> None:
         self.setStyleSheet(
             """
@@ -586,17 +695,14 @@ class MainWindow(QMainWindow):
         settings = load_settings()
         self.apply_settings_to_ui(settings)
         self.log("已加载本地设置")
-        self.on_language_mode_changed()
-        self.on_transcription_provider_changed()
-        self.on_translation_mode_changed()
-        self.on_output_mode_changed()
-        self.on_vad_enabled_changed()
+        self.refresh_settings_visibility()
 
     def apply_settings_to_ui(self, settings: AppSettings) -> None:
         self.transcription_provider_combo.setCurrentIndex(
             1 if settings.transcription.provider == "whisper_openai_compatible" else 0
         )
         self.mistral_api_key_input.setText(settings.transcription.mistral.api_key)
+        self.translation_mistral_api_key_input.setText(settings.transcription.mistral.api_key)
         self.mistral_model_combo.setCurrentText(settings.transcription.mistral.model)
         self.whisper_base_url_input.setText(settings.transcription.whisper.base_url)
         self.whisper_api_key_input.setText(settings.transcription.whisper.api_key)
@@ -682,10 +788,17 @@ class MainWindow(QMainWindow):
 
     def on_transcription_provider_changed(self) -> None:
         provider = self.transcription_provider_combo.currentData()
+        translation_mode = self.translation_mode_combo.currentData()
         use_mistral = provider == "mistral"
         use_whisper = provider == "whisper_openai_compatible"
-        self.mistral_api_key_input.setEnabled(use_mistral or self.translation_mode_combo.currentData() == "mistral")
-        self.show_mistral_key_checkbox.setEnabled(use_mistral or self.translation_mode_combo.currentData() == "mistral")
+        show_mistral_key = use_mistral or translation_mode == "mistral"
+
+        self._set_widgets_visible(self.transcription_mistral_key_widgets, show_mistral_key)
+        self._set_widgets_visible(self.transcription_mistral_only_widgets, use_mistral)
+        self._set_widgets_visible(self.transcription_whisper_widgets, use_whisper)
+
+        self.mistral_api_key_input.setEnabled(show_mistral_key)
+        self.show_mistral_key_checkbox.setEnabled(show_mistral_key)
         self.mistral_model_combo.setEnabled(use_mistral)
         self.whisper_base_url_input.setEnabled(use_whisper)
         self.whisper_api_key_input.setEnabled(use_whisper)
@@ -698,8 +811,13 @@ class MainWindow(QMainWindow):
     def on_translation_mode_changed(self) -> None:
         mode = self.translation_mode_combo.currentData()
         enable_translation = mode != "none"
+        use_mistral = mode == "mistral"
         use_openai = mode == "openai"
         current_model = self.translation_model_input.text().strip()
+
+        self._set_widgets_visible(self.translation_common_widgets, enable_translation)
+        self._set_widgets_visible(self.translation_mistral_widgets, use_mistral)
+        self._set_widgets_visible(self.translation_openai_widgets, use_openai)
 
         self.translation_target_input.setEnabled(enable_translation)
         self.translation_model_input.setEnabled(enable_translation)
@@ -707,6 +825,8 @@ class MainWindow(QMainWindow):
         self.translation_keep_original_checkbox.setEnabled(enable_translation)
         self.allow_subtitle_import_checkbox.setEnabled(enable_translation)
         self.subtitle_translation_thread_spin.setEnabled(enable_translation)
+        self.translation_mistral_api_key_input.setEnabled(use_mistral)
+        self.show_translation_mistral_key_checkbox.setEnabled(use_mistral)
         self.translation_openai_base_input.setEnabled(use_openai)
         self.translation_openai_key_input.setEnabled(use_openai)
         self.show_translation_openai_key_checkbox.setEnabled(use_openai)
