@@ -245,8 +245,8 @@ class MainWindow(QMainWindow):
 
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         for group in (
@@ -648,6 +648,7 @@ class MainWindow(QMainWindow):
                 border: 1px solid #b8c7d9;
                 border-radius: 10px;
                 margin-top: 10px;
+                padding: 12px 8px 8px 8px;
                 font-weight: 600;
                 background: #f9fbfd;
             }
@@ -664,6 +665,36 @@ class MainWindow(QMainWindow):
                 min-height: 84px;
             }
             QLabel { color: #1c2b39; }
+            QCheckBox {
+                color: #1c2b39;
+                background: transparent;
+                spacing: 8px;
+                padding: 3px 2px;
+            }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #7f95ad;
+                border-radius: 4px;
+                background: white;
+            }
+            QCheckBox::indicator:hover { border: 1px solid #2e78c7; }
+            QCheckBox::indicator:checked {
+                background: #2e78c7;
+                border: 1px solid #2e78c7;
+            }
+            QCheckBox::indicator:checked:hover {
+                background: #266ab1;
+                border: 1px solid #266ab1;
+            }
+            QCheckBox::indicator:disabled {
+                background: #edf2f7;
+                border: 1px solid #c5d2df;
+            }
+            QCheckBox::indicator:checked:disabled {
+                background: #9db5cc;
+                border: 1px solid #9db5cc;
+            }
             QPushButton {
                 background: #2e78c7;
                 color: white;
@@ -683,6 +714,24 @@ class MainWindow(QMainWindow):
                 padding: 5px;
                 background: white;
                 color: #1c2b39;
+            }
+            QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+                background: #edf2f7;
+                color: #68798a;
+                border: 1px solid #c5d2df;
+            }
+            QComboBox::drop-down, QSpinBox::up-button, QSpinBox::down-button,
+            QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
+                border-left: 1px solid #b4c4d4;
+                background: #eef3f8;
+                width: 22px;
+            }
+            QComboBox QAbstractItemView {
+                background: white;
+                color: #1c2b39;
+                selection-background-color: #d9e6f3;
+                selection-color: #1c2b39;
+                border: 1px solid #b4c4d4;
             }
             QTableWidget {
                 border: 1px solid #b8c7d9;
