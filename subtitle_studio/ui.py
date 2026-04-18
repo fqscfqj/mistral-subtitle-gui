@@ -620,7 +620,30 @@ class MainWindow(QMainWindow):
     def apply_style(self) -> None:
         self.setStyleSheet(
             """
-            QMainWindow { background: #eef3f8; }
+            QMainWindow, QWidget { background: #eef3f8; color: #1c2b39; }
+            QTabWidget::pane {
+                border: 1px solid #b8c7d9;
+                border-radius: 8px;
+                background: #eef3f8;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background: #d9e6f3;
+                color: #1c2b39;
+                border: 1px solid #b8c7d9;
+                border-bottom: none;
+                border-top-left-radius: 7px;
+                border-top-right-radius: 7px;
+                padding: 7px 18px;
+                margin-right: 3px;
+                font-weight: 600;
+            }
+            QTabBar::tab:selected {
+                background: #f9fbfd;
+                color: #1e2d3d;
+            }
+            QTabBar::tab:!selected:hover { background: #e6f0fa; }
+            QScrollArea, QScrollArea > QWidget > QWidget { background: #eef3f8; }
             QGroupBox {
                 border: 1px solid #b8c7d9;
                 border-radius: 10px;
@@ -654,11 +677,12 @@ class MainWindow(QMainWindow):
                 background: #9db5cc;
                 color: #ebf2f9;
             }
-            QLineEdit, QPlainTextEdit, QComboBox, QSpinBox {
+            QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
                 border: 1px solid #b4c4d4;
                 border-radius: 6px;
                 padding: 5px;
                 background: white;
+                color: #1c2b39;
             }
             QTableWidget {
                 border: 1px solid #b8c7d9;
